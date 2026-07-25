@@ -1,0 +1,486 @@
+---
+project: agentic-marketplace-moderator
+type: system-spec
+version: 0.3.0
+status: draft
+audience: ai-coding-agent
+---
+
+# Agentic Marketplace Moderator — Build Spec
+
+A multi-agent moderation pipeline for marketplace listings. A seller submits a listing;
+a chain of agents evaluates it and routes it to **APPROVE**, **REJECT**, or **REVIEW**
+(human-in-the-loop). Moderators work the review queue entirely through a conversational
+CLI — no web UI.
+
+Stack: **Postgres** (storage), **Claude Code** (orchestration + CLI), **NVIDIA Nemotron
+3.5 Content Safety** (called via its hosted API for the Safety Agent step).
+
+---
+
+## 1. Architecture
+
+```
+Seller → submit listing → Postgres
+                              │
+                     triggers workflow (in-process)
+                              │
+                        Intake Agent
+                              │
+        ┌───────────────┬────┴────┬───────────────┐
+        ▼                ▼        ▼               ▼
+  Evidence Agent  Consistency Agent  Safety Agent    Policy Agent
+        └───────────────┴────┬────┴───────────────┘
+                              ▼
+                        Decision Agent
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+           APPROVE          REVIEW          REJECT
+                              │
+                    (REVIEW only) Human Queue → CLI
+```
+
+Intake runs first (produces the canonical document). Evidence, Consistency, Safety, and
+Policy then run in parallel off that document — Consistency depends only on the canonical
+document too, not on Evidence's output, so it doesn't need to wait in line behind it.
+Decision Agent waits on all four. Single process, async fan-out/fan-in — no broker, no
+separate API service.
+
+---
+
+## 2. Listing State Machine
+
+Listings arrive in the DB with `status: "PENDING_MODERATION"` — that value is the
+workflow trigger, not a status the workflow assigns.
+
+```
+PENDING_MODERATION → PROCESSING →
+    APPROVED               (terminal)
+    REJECTED                (terminal)
+    PENDING_REVIEW →
+        APPROVED (by moderator)   (terminal)
+        REJECTED (by moderator)   (terminal)
+    FAILED (agent error) → PENDING_REVIEW   (never silent-approve on failure)
+```
+
+### 2.1 Claiming Listings (Locking Model)
+
+The poller claims work with a single atomic transaction — no lock table, no broker:
+
+```sql
+UPDATE listings
+SET status = 'PROCESSING', updated_at = now()
+WHERE listing_id IN (
+    SELECT listing_id FROM listings
+    WHERE status = 'PENDING_MODERATION'
+    ORDER BY created_at
+    LIMIT :batch_size
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+```
+
+`FOR UPDATE SKIP LOCKED` means a row already locked by another in-flight transaction is
+skipped, not blocked on — two poller instances (or a restarted poller racing its own
+predecessor) can never claim the same listing twice. This is what makes it safe to run
+more than one poller even though each individual pipeline run stays single-process
+fan-out/fan-in (§1); no cross-process coordination beyond the one `UPDATE` is needed.
+
+**Stale claims.** A worker that crashes mid-pipeline leaves its row in `PROCESSING`
+indefinitely. A sweep, run on a timer (e.g. every minute), resets any row that has been
+`PROCESSING` longer than a lease timeout (default 5 minutes, configurable) to
+`PENDING_REVIEW` flagged `FAILED` — the same terminal-on-error path as §4, not a special
+case:
+
+```sql
+UPDATE listings
+SET status = 'PENDING_REVIEW', updated_at = now()
+WHERE status = 'PROCESSING' AND updated_at < now() - interval '5 minutes';
+```
+
+Requires an `updated_at` column on `listings`, touched on every status transition
+(added to `schema.sql`).
+
+---
+
+## 3. Agents
+
+### 3.1 Intake Agent
+Reads a listing row where `status = "PENDING_MODERATION"` and maps it to the canonical
+document every other agent consumes. Does not need to introspect the schema — this is
+the actual listing shape:
+
+**In (DB row)**
+```json
+{
+  "listingId": "LST-100234",
+  "seller": { "sellerId": "SUP-9281", "companyName": "Global Trade Ltd",
+              "country": "United Kingdom", "verified": true, "rating": 4.8,
+              "previousViolations": 0 },
+  "title": "Apple iPhone 16 Pro Max 256GB",
+  "description": "Brand new, factory sealed with international warranty.",
+  "category": { "id": "electronics.mobile", "name": "Mobile Phones" },
+  "price": { "amount": 899.99, "currency": "GBP" },
+  "quantity": 100,
+  "condition": "new",
+  "brand": "Apple",
+  "model": "iPhone 16 Pro Max",
+  "sku": "APL-IP16PM-256",
+  "images": [ { "id": "img-1", "url": "s3://listings/img1.jpg" },
+              { "id": "img-2", "url": "s3://listings/img2.jpg" } ],
+  "attributes": { "colour": "Black", "storage": "256GB", "origin": "China" },
+  "shipping": { "location": "London", "leadTimeDays": 5 },
+  "createdAt": "2026-07-24T20:45:31Z",
+  "status": "PENDING_MODERATION"
+}
+```
+
+**Out (canonical)**
+```json
+{
+  "listingId": "LST-100234",
+  "title": "Apple iPhone 16 Pro Max 256GB",
+  "description": "Brand new, factory sealed with international warranty.",
+  "images": ["s3://listings/img1.jpg", "s3://listings/img2.jpg"],
+  "sellerId": "SUP-9281",
+  "sellerVerified": true,
+  "sellerPreviousViolations": 0,
+  "categoryId": "electronics.mobile",
+  "declaredBrand": "Apple",
+  "condition": "new"
+}
+```
+Images are `s3://` URIs, not HTTP URLs — Evidence and Safety agents need S3 read access
+(signed URL or SDK call) to fetch them, not a plain web fetch.
+
+`declaredBrand` is carried through specifically so the Evidence Agent can cross-check it
+against whatever brand it detects from the images/OCR (see §3.2) — that mismatch is what
+drives the "counterfeit branding" case already used as the CLI example in §6.
+
+`sellerPreviousViolations` is carried through as a plain field, not a separate agent —
+the Decision Agent factors seller history directly into confidence/severity (§3.6)
+without needing a dedicated "risk agent" to compute it.
+
+### 3.2 Evidence Agent
+Facts only, no judgment. OCR, image understanding, brand/object detection, and
+document-level extraction (certificate numbers, serial numbers, expiry dates, country of
+origin where visible on packaging/labels) via vision-language model
+`nvidia/nemotron-nano-12b-v2-vl`, one call per image, results merged across all of a
+listing's images. Compares detected brand(s) against the canonical document's
+`declaredBrand` and flags a mismatch if they disagree — that's the input the Policy
+Agent needs to catch counterfeit listings. **No brand detected on any image at all also
+counts as a mismatch** when a brand is declared — an undeclared logo and a genuinely
+absent one are both "the packaging doesn't corroborate the claim," which is exactly the
+counterfeit-branding signal C001 needs; it is not required that a *different* brand be
+detected. Exception: `declaredBrand` values of `generic`, `unbranded`, `no brand`,
+`none`, or `n/a` (case-insensitive) aren't a brand claim at all, so they never trigger a
+mismatch — otherwise every legitimately unbranded/commodity listing would falsely match
+C001. Written as an `EvidenceAgent` artifact per §5 (this is its `payload`):
+
+**Out**
+```json
+{ "objects": ["smartphone", "retail box"], "brandsDetected": ["Apple"],
+  "ocr": ["Apple", "iPhone", "256GB"], "brandMismatch": false,
+  "certificateNumbers": [], "serialNumbers": [], "expiryDate": null,
+  "countryOfOrigin": "China" }
+```
+
+Implemented in `agents/evidence_agent.py`. Images are fetched via `file://` in local
+dev/demo; `s3://` (the production scheme, §3.1) raises `NotImplementedError` until a
+signed-URL or SDK read is wired in.
+
+### 3.3 Consistency Agent
+Cross-checks fields that should agree with each other but are supplied independently:
+title↔description, description↔images, images↔declared brand, category↔detected
+objects. Doesn't judge policy — just surfaces disagreement for the Decision Agent to
+weigh. Does its own lightweight image understanding for the three image-based checks
+rather than reusing Evidence Agent's output — required by §1: Consistency depends only
+on the canonical document, not on Evidence's output.
+
+Each check is one true/false model call (text model `mistralai/mistral-nemotron` for
+title↔description, vision model `nvidia/nemotron-nano-12b-v2-vl` for the three
+image-based checks); with more than one image, a check is `consistent` if *any* image
+confirms it. `inconsistencyScore` is not a separate judgment call — it's the mean, over
+all checks, of the probability mass the model itself placed on the "inconsistent"
+answer (1 − confidence when the verdict was consistent, confidence itself when it
+wasn't), so a run of confidently-consistent checks produces a score near 0 without
+that number being invented.
+
+Note: `description_vs_images` is measurably noisier than the other three on the demo's
+synthetic images, since those are text-only placeholders rather than real product
+photos — there's little for a vision model to visually confirm condition/warranty
+language against. Real product photography should make this check as reliable as the
+others.
+
+Written as a `ConsistencyAgent` artifact per §5.
+
+**Out**
+```json
+{ "checks": [
+    { "pair": "title_vs_description", "consistent": true },
+    { "pair": "description_vs_images", "consistent": true },
+    { "pair": "images_vs_declaredBrand", "consistent": true },
+    { "pair": "category_vs_detectedObjects", "consistent": true }
+  ],
+  "inconsistencyScore": 0.02 }
+```
+
+Implemented in `agents/consistency_agent.py`.
+
+### 3.4 Safety Agent
+Content-safety classification, model `nvidia/llama-3.1-nemotron-safety-guard-8b-v3`
+(not `nemotron-3.5-content-safety` — that model only returns a binary safe/unsafe
+verdict with no category, and Policy Agent needs a category to pick a rule). Classifies
+`title` + `description` text; images/OCR-based safety checks are Evidence Agent's job
+(§3.2), not this agent's. Written as a `SafetyAgent` artifact per §5.
+
+`confidence` is the model's own log-probability for the safe/unsafe token it emitted
+(`logprobs: true` on the chat completion), not a separately requested score. `violations`
+is the model's raw `Safety Categories` string, split on `,` — known categories include
+at least `Guns and Illegal Weapons`, `Controlled/Regulated Substances`,
+`Criminal Planning/Confessions`, `Fraud/Deception`; confirm the full taxonomy against
+the model card before finalizing the Policy Agent's rule-trigger table in §3.5.
+`explanation` is generated deterministically from the category list, not model-written
+prose.
+
+**Out**
+```json
+{ "violations": ["Guns and Illegal Weapons"], "confidence": 0.97,
+  "explanation": "Content flagged as unsafe: Guns and Illegal Weapons." }
+```
+
+Implemented in `agents/safety_agent.py`.
+
+### 3.5 Policy Agent
+Maps evidence/safety/consistency findings to policy rules, keyed off `categoryId` (e.g.
+`electronics.mobile`). Rule sets are looked up per category rather than one global
+policy — a listing under `electronics.*` and one under `finance.*` check different rule
+sets. Returns an **array** — a listing can match more than one rule.
+
+| Rule ID | Description | Triggered by |
+|---|---|---|
+| W001 | Weapons prohibited | Safety Agent `violations` contains `Guns and Illegal Weapons` |
+| C001 | Counterfeit goods prohibited | Evidence Agent `brandMismatch: true` |
+| C004 | Misleading product information | Consistency Agent `inconsistencyScore` above threshold |
+| D001 | Illegal drugs prohibited | Safety Agent `violations` contains `Controlled/Regulated Substances` |
+
+Each match also carries a `confidence`, attributed from whichever upstream agent's signal
+triggered the rule — Policy Agent passes through that agent's number rather than
+inventing its own probability:
+
+| Rule triggered by | `confidence` source |
+|---|---|
+| SafetyAgent violation (W001, D001) | `SafetyAgent.payload.confidence` |
+| EvidenceAgent `brandMismatch: true` (C001) | `1.0` — deterministic OCR/logo comparison, not a probability |
+| ConsistencyAgent `inconsistencyScore` above threshold (C004) | `ConsistencyAgent.payload.inconsistencyScore` |
+
+Written as a `PolicyAgent` artifact per §5.
+
+**Out**
+```json
+{ "matches": [
+    { "rule": "C001", "severity": "High", "autoReject": false, "confidence": 1.0 }
+] }
+```
+
+Deterministic — pure rule logic over the three upstream payloads, no model call.
+Implemented in `agents/policy_agent.py`. `autoReject` is `false` for every current rule
+(matches the example above); it's a reserved hard-override lever for a future rule that
+should bypass confidence-based routing entirely (§4 step 1), not something today's four
+rules use. `CONSISTENCY_THRESHOLD` (0.30) for C004 is a first pass from observed scores
+on the demo's synthetic data, not tuned against real traffic.
+
+### 3.6 Decision Agent
+Aggregates `PolicyAgent.matches` into a single decision and confidence using the fusion
+algorithm in §4 — it combines the confidences Policy Agent already attributed per match,
+it does not re-derive them from raw agent outputs. Seller history
+(`sellerPreviousViolations`) shifts confidence toward REVIEW/REJECT for otherwise-
+borderline cases (§4) rather than triggering its own rule. Written as a `DecisionAgent`
+artifact per §5 — this is that artifact's `payload`:
+
+**Out**
+```json
+{ "decision": "REVIEW", "confidence": 0.73, "policyRules": ["C001"],
+  "explanation": "Brand detected but authenticity cannot be verified from supplied images." }
+```
+
+Deterministic — pure fusion logic per §4, no model call. `explanation` is generated
+from the matched rules' own descriptions (or the residual inconsistency score when
+none matched) plus the seller-history adjustment if one applied, not model-written
+prose — same pattern as Safety and Consistency Agents. Implemented in
+`agents/decision_agent.py`.
+
+---
+
+## 4. Decision Fusion & Confidence Routing
+
+Deterministic, in three steps — no learned weighting, no free-form LLM judgment call on
+the final number:
+
+**Step 1 — aggregate confidence.**
+- `matches` non-empty → `confidence = max(match.confidence for match in matches)`.
+- `matches` empty → `confidence = 1 - ConsistencyAgent.payload.inconsistencyScore` — the
+  only residual risk signal available when no policy rule fired.
+
+**Step 2 — seller history adjustment.** If `sellerPreviousViolations > 0`, compute
+`adjustment = min(0.05 * sellerPreviousViolations, 0.20)`:
+- Would this route to APPROVE (see Step 3) → subtract `adjustment` from `confidence`
+  first (repeat-violation sellers lose the benefit of the doubt, more of their
+  borderline listings fall through to REVIEW).
+- Would this route to REJECT → add `adjustment` to `confidence` first (repeat-violation
+  sellers need less certainty to confirm a reject).
+- This is the only effect seller history has — it never manufactures a policy match of
+  its own (§3.1).
+
+**Step 3 — routing**, using the adjusted `confidence`:
+
+| Order | Condition | Result |
+|---|---|---|
+| 1 | any match has `autoReject: true` | Reject (hard override, ignores confidence) |
+| 2 | any match has `severity: "Critical"` and `confidence ≥ 0.95` | Reject |
+| 3 | `matches` empty and `confidence ≥ 0.90` | Approve |
+| 4 | otherwise | Review |
+
+Thresholds (`0.95`, `0.90`, the `0.20` adjustment cap) are configurable, not hard-coded.
+Critical-severity matches never auto-approve regardless of score — they resolve to
+REJECT or REVIEW only.
+
+If any agent errors or times out, the listing goes to `PENDING_REVIEW` (flagged `FAILED`)
+rather than defaulting to approve.
+
+---
+
+## 5. Storage: Append-Only Artifact Log
+
+The raw listing row is never mutated. Each agent run writes one immutable artifact
+instead — this is what makes single-stage reruns (`rerun_analysis`) safe and gives a full
+audit trail without a flat "decision + evidence" blob that different agents all write
+into.
+
+```json
+{
+  "listingId": "LST-100234",
+  "agent": "SafetyAgent",
+  "version": "nemotron-3.5",
+  "producedAt": "2026-07-24T20:45:55Z",
+  "payload": { "violations": ["Weapons"], "confidence": 0.97, "explanation": "string" }
+}
+```
+
+One row per agent run, `agent` + `version` identifying what produced it. A rerun
+(e.g. Safety Agent on a newer model) appends a new artifact rather than overwriting the
+old one — prior runs stay queryable for comparison.
+
+**Decision artifacts** are the same shape, with the Decision Agent's output as payload,
+and reference the specific upstream artifacts they were computed from:
+
+```json
+{
+  "listingId": "LST-100234",
+  "agent": "DecisionAgent",
+  "version": "string",
+  "producedAt": "2026-07-24T20:46:02Z",
+  "payload": {
+    "decision": "REVIEW",
+    "confidence": 0.73,
+    "policyRules": ["C001"],
+    "explanation": "Brand detected but authenticity cannot be verified from supplied images.",
+    "moderator": "string | null"
+  },
+  "basedOn": ["EvidenceAgent@<producedAt>", "ConsistencyAgent@<producedAt>",
+              "SafetyAgent@<producedAt>", "PolicyAgent@<producedAt>"]
+}
+```
+
+`policyRules` stays the single source of truth for what was violated — no separate free-
+text `violations` list duplicating it; any human-readable line is derived from the rule's
+own description plus `explanation` for the case-specific reasoning.
+
+The **latest** `DecisionAgent` artifact per listing is the listing's current decision.
+Moderator overrides append a new `DecisionAgent` artifact with `moderator` set, rather
+than editing the automated one.
+
+`show case` (§6) assembles a view from: the raw listing row + all artifacts for that
+`listingId`, ordered by `producedAt`.
+
+---
+
+## 6. Moderator CLI
+
+Conversational, tool-driven, no direct DB access. Implemented as a plain Python tool
+layer in `cli/tools.py` (backed by `db.py` and `pipeline.py`, orchestration in
+`pipeline.py`, Intake mapping in `intake.py`) — there is no separate chat loop; a
+moderator drives it by talking to Claude Code, which calls these functions directly.
+Verified end-to-end against a real Postgres instance: seeded via
+`generate_synthetic_data.py`, processed with `pipeline.poll_and_process()`, then every
+tool below exercised against it (`list_pending`, `get_listing`, `explain_case`,
+`show_images`, `search_policy`, `find_similar_cases`, `approve_listing`,
+`reject_listing`, `rerun_analysis`) — moderator overrides confirmed to append a new
+`DecisionAgent` artifact rather than overwrite the automated one (§5).
+
+**Example**
+```
+> show next case
+
+Listing 98342 — Rolex Watch
+Status: Pending Review · Confidence: 74%
+Issues: Counterfeit branding, Missing serial number
+Recommendation: Manual verification required.
+
+> explain case 98342
+
+Evidence Agent
+✓ Apple logo detected
+✓ OCR found "iPhone 16"
+
+Consistency Agent
+⚠ Description mentions a different model than the title
+
+Safety Agent
+✓ No prohibited content
+
+Policy Agent
+Rule C004: Misleading product information
+
+Decision Agent
+REVIEW (Confidence: 0.74)
+
+> approve
+```
+`explain case` reads straight off the artifact log (§5) — one section per agent artifact
+for that listing, in order — rather than a separate reasoning trace to maintain.
+
+**Tools**
+| Tool | In | Out |
+|---|---|---|
+| `list_pending()` | `{ limit?, category? }` | `Listing[]` |
+| `get_listing(listingId)` | `{ listingId }` | full document + agent outputs |
+| `explain_case(listingId)` | `{ listingId }` | all artifacts for the listing, per-agent |
+| `approve_listing(listingId, moderatorId, note?)` | — | updated status |
+| `reject_listing(listingId, moderatorId, reason)` | — | updated status |
+| `search_policy(query)` | `{ query }` | matching rule(s) |
+| `find_similar_cases(listingId, k?)` | — | `Case[]` |
+| `show_images(listingId)` | — | image URLs |
+| `rerun_analysis(listingId, agent?)` | — | new agent output |
+| `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
+
+`approve_listing`/`reject_listing` are thin wrappers over `record_decision` — all three
+append a new `DecisionAgent` artifact and move the listing to the matching terminal
+status; the two convenience wrappers just fix `decision` to `APPROVE`/`REJECT` and set
+`moderator` from `moderatorId`. `find_similar_cases` is a same-category-plus-
+overlapping-policy-rules heuristic, not semantic/embedding similarity — there's no
+vector search in scope; revisit if case volume outgrows what the heuristic ranks well.
+
+---
+
+## 7. End-to-End Flow
+
+1. A listing exists in Postgres with `status: "PENDING_MODERATION"`.
+2. Workflow picks it up and triggers in-process.
+3. Intake maps the row to the canonical document (§3.1).
+4. Evidence, Consistency, Safety, Policy run in parallel.
+5. Decision Agent applies thresholds → APPROVE / REJECT / REVIEW.
+6. Decision + audit record persisted.
+7. If REVIEW → listing enters the CLI queue.
+8. Moderator reviews and calls `record_decision()` to close it out.
