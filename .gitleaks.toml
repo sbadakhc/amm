@@ -1,0 +1,13 @@
+# gitleaks configuration -- https://github.com/gitleaks/gitleaks
+# Borrowed from the aixcl project's setup, trimmed to amm's own history/paths.
+
+title = "amm gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known safe patterns in this repository"
+paths = [
+  '''\.env\.example''',
+]
