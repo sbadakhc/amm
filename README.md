@@ -11,6 +11,28 @@ routing rules, storage model, CLI tool table) and
 [docs/decisions/](docs/decisions/) for why several real implementation choices
 ended up different from the original spec.
 
+## Prerequisites
+
+- **[Claude Code](https://claude.com/claude-code)**, installed and authenticated —
+  this project's orchestration and Moderator CLI are driven entirely by talking to
+  it; there's no separate chat service or web UI
+  (`docs/decisions/0002-cli-tool-layer-not-chat-loop.md`).
+- **Python 3.11+**
+- **[Docker](https://docs.docker.com/get-docker/)** — for `scripts/dev-db.sh`'s
+  throwaway Postgres (`pgvector/pgvector:pg16` image, needed for
+  `listing_embeddings`/its HNSW index, §6 / `docs/decisions/0016`).
+- **`git` and the [GitHub CLI](https://cli.github.com/) (`gh`)** — if you're
+  following this project's issue → branch → PR → merge → cleanup workflow
+  (`.claude/commands/commit-pr.md`, `finish-pr.md`).
+- **An NVIDIA API key** — every model call in this pipeline goes through NVIDIA's
+  hosted API (`https://integrate.api.nvidia.com`). Get one at
+  [build.nvidia.com](https://build.nvidia.com). The specific model per agent is
+  hardcoded, not configurable via env var — each was chosen by verifying its actual
+  behavior live before committing to it (see Tech Stack below and
+  `docs/decisions/0001-safety-agent-model-choice.md` for the clearest example of why
+  that mattered: the originally-planned model for the Safety Agent turned out to
+  return the wrong output shape entirely).
+
 ## Architecture
 
 ```
@@ -30,11 +52,20 @@ Seller → submit listing → Postgres
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
            APPROVE          REVIEW          REJECT
-                              │
+                              │                │
                     (REVIEW only) Human Queue → CLI
+                              │                │
+                        ESCALATED ──┐    APPEAL_REQUESTED
+                        (senior     │    (moderator-relayed,
+                         review)    │     no seller-facing
+                              │     │     surface exists, §8.1)
+                              └─────┴──→ APPROVE / REJECT
 ```
 
-Single process, async fan-out/fan-in — no broker, no separate API service.
+Single process, async fan-out/fan-in — no broker, no separate API service. The
+escalation and appeal paths (SPEC.md §8) are moderator-only — the automated Decision
+Agent never produces `ESCALATED` or `APPEAL_REQUESTED`, and both resolve back to a
+plain APPROVE/REJECT rather than separate terminal states.
 
 ## Tech Stack
 
@@ -64,16 +95,19 @@ Single process, async fan-out/fan-in — no broker, no separate API service.
 
 ```
 agents/               Evidence, Consistency, Safety, Policy, Decision agents
-cli/tools.py          Moderator CLI tools (§6): list_pending, explain_case, approve_listing, ...
+cli/tools.py          Moderator CLI tools (§6/§8): list_pending, explain_case, approve_listing,
+                      escalate_case, request_appeal, resolve_appeal, suspend_seller, ...
 intake.py             raw DB row -> canonical document mapping (§3.1)
-db.py                 Postgres access: atomic claim/lock (§2.1), artifact log (§5)
+db.py                 Postgres access: atomic claim/lock (§2.1), artifact log (§5), sellers (§8.3)
 pipeline.py           orchestration: parallel fan-out -> Policy -> Decision
 service.py            long-running poller + stale-claim sweep (§7)
 images.py             shared file:// / s3:// image fetch helper
 embeddings.py          text-embedding helper for find_similar_cases (§6)
+scripts/inspect_listing.py  moderator image/queue inspection helper (§6, .claude/skills/inspect-listing/)
 generate_synthetic_data.py   synthetic listing generator (5 demo scenarios)
+fixtures/real_photos/        real, attributed product photos used by the generator (docs/decisions/0013)
 listings.json, images/       sample generated output
-schema.sql            Postgres schema (listings + artifacts)
+schema.sql            Postgres schema (listings, artifacts, moderators, sellers, listing_embeddings)
 tests/                pytest suite: offline (mocked model calls) + real-Postgres integration
 docs/decisions/       ADRs for the non-obvious calls made while building this
 scripts/dev-db.sh     one-command throwaway Postgres for local dev/testing
@@ -165,22 +199,77 @@ Either way, claims listings, fans out to Evidence/Consistency/Safety in parallel
 Policy, then Decision, writing one artifact per agent run and updating each listing's
 status (`APPROVED` / `REJECTED` / `PENDING_REVIEW`).
 
-### 7. Work the review queue via the CLI tools
+### 7. Work the review queue
 
-```python
-from cli import tools
+In practice, a moderator does all of this conversationally through Claude Code —
+"show me what's pending," "explain this case," "approve it" — not by writing Python.
+The tool layer (`cli/tools.py`) and the `/inspect-listing` skill are what Claude Code
+calls on the moderator's behalf. See SPEC.md §6/§8 for the full tool table and
+example transcripts; this section is the narrative version.
 
-pending = tools.list_pending()
-listing_id = pending[0]["listing_id"]
+**Survey the queue.** `/inspect-listing --queue` (optionally `--status
+PENDING_REVIEW` or another status) prints one table across every listing that
+matches — status, the automated decision, confidence, matched policy rules, and an
+image link — backed by a single image server rather than one per listing:
 
-tools.explain_case(listing_id)          # every agent's artifact, in order
-tools.find_similar_cases(listing_id)    # nearest neighbors by real embedding similarity
-tools.approve_listing(listing_id, "mod-1", "Looks fine on manual review.")
+```
+> what's pending?
+
+| Listing     | Title                | Status         | Decision | Confidence | Policy Rules | Images |
+|-------------|-----------------------|-----------------|----------|------------|--------------|--------|
+| LST-4F58A1  | AK-47 ...             | REJECTED        | REJECT   | 1.00       | W001         | [0]    |
+| LST-A79214  | iPhone 16 Pro Max     | PENDING_REVIEW  | REVIEW   | 1.00       | C001         | [0]    |
 ```
 
-In practice, a moderator does this conversationally through Claude Code rather than
-writing Python directly — e.g. "show me the next pending case," "explain it," "approve
-it." See SPEC.md §6 for the full tool table and example transcript.
+**Deep-dive one case.** `/inspect-listing <listingId>` prints the listing's full
+text plus every agent artifact (Safety/Evidence/Consistency/Policy/Decision), then
+shows its image(s) one at a time, paced by the moderator — either rendered inline in
+the conversation, or via `--serve`, which pops a real browser tab (works even though
+this dev environment has no way to launch a GUI viewer directly, see
+`docs/decisions/0011`).
+
+**Decide.** The routine actions (`from cli import tools`, same layer Claude Code
+calls under the hood):
+```python
+tools.approve_listing(listing_id, "mod-1", "Looks fine on manual review.")
+tools.reject_listing(listing_id, "mod-1", "Counterfeit branding confirmed.")
+```
+A REJECT here (or an automated one) increments the seller's placeholder violation
+counter (§8.3) — a live count, not the static snapshot taken when the listing was
+first submitted.
+
+**Escalate for a second opinion.** Any `PENDING_REVIEW` case can go to a senior-review
+tier instead of being decided immediately:
+```python
+tools.escalate_case(listing_id, "Ambiguous branding, want a second opinion.")
+```
+Resolving an escalated case needs no separate tool — `approve_listing`/
+`reject_listing` already transition any listing regardless of current status.
+
+**Handle an appeal.** This system has no seller-facing surface at all (no portal, no
+API) — `request_appeal` is a moderator-invoked tool relaying an appeal that reached a
+human through some other channel, not something a seller triggers directly:
+```python
+tools.request_appeal(listing_id, "Seller provided proof of authenticity.")
+tools.resolve_appeal(listing_id, "APPROVE", "Proof accepted, overturning rejection.")
+# or: tools.resolve_appeal(listing_id, "REJECT", "Upheld on review.")
+```
+Only `REJECTED` listings can be appealed. Resolving reuses `APPROVED`/`REJECTED` as
+the real outcome rather than separate appeal-specific statuses — the artifact log's
+`version` field (`"moderator-appeal-resolution"`) is what marks it as an appeal
+outcome. Denying an appeal does **not** double-count the seller's violation; it was
+already counted when the listing was first rejected.
+
+**Seller account actions.** For a seller with a pattern of violations:
+```python
+tools.list_seller_cases(seller_id)                          # every listing from this seller
+tools.suspend_seller(seller_id, "Repeated policy violations.")
+tools.reinstate_seller(seller_id, "Investigation cleared them.")
+```
+`sellers` is an explicit placeholder (§8.1, `docs/decisions/0017`) — not assumed to
+be a real customer backend's actual source of truth for seller/account identity, and
+suspending a seller doesn't cascade to their existing listings (each stays
+independently decided).
 
 ### 8. Run the tests
 

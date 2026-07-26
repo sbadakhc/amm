@@ -44,7 +44,8 @@ as they were found. Keep that habit:
 ## 4. Safe Areas
 
 Freely editable with normal care: `agents/*.py`, `cli/tools.py`, `pipeline.py`,
-`intake.py`, `db.py`, `images.py`, `generate_synthetic_data.py`, `SPEC.md`.
+`intake.py`, `db.py`, `images.py`, `generate_synthetic_data.py`,
+`scripts/inspect_listing.py`, `SPEC.md`.
 
 Handle with more caution:
 - `schema.sql` -- changing column types/constraints on `listings`/`artifacts` affects
