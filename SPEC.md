@@ -291,7 +291,9 @@ Implemented in `agents/policy_agent.py`. `autoReject` is `false` for every curre
 (matches the example above); it's a reserved hard-override lever for a future rule that
 should bypass confidence-based routing entirely (§4 step 1), not something today's four
 rules use. `CONSISTENCY_THRESHOLD` (0.30) for C004 is a first pass from observed scores
-on the demo's synthetic data, not tuned against real traffic.
+on the demo's synthetic data, not tuned against real traffic. Configurable via the
+`CONSISTENCY_THRESHOLD` env var (read once at process start) or a per-call override on
+`run_policy_agent` — see `docs/decisions/0008-env-var-thresholds.md`.
 
 ### 3.6 Decision Agent
 Aggregates `PolicyAgent.matches` into a single decision and confidence using the fusion
@@ -344,7 +346,11 @@ the final number:
 | 3 | `matches` empty and `confidence ≥ 0.90` | Approve |
 | 4 | otherwise | Review |
 
-Thresholds (`0.95`, `0.90`, the `0.20` adjustment cap) are configurable, not hard-coded.
+Thresholds (`0.95`, `0.90`, the `0.20` adjustment cap) are configurable, not hard-coded
+— via `CRITICAL_REJECT_THRESHOLD` / `AUTO_APPROVE_THRESHOLD` /
+`SELLER_HISTORY_ADJUSTMENT_PER_VIOLATION` / `SELLER_HISTORY_ADJUSTMENT_CAP` env vars
+(read once at process start, same pattern as `service.py`'s config) or per-call
+overrides on `run_decision_agent` — see `docs/decisions/0008-env-var-thresholds.md`.
 Critical-severity matches never auto-approve regardless of score — they resolve to
 REJECT or REVIEW only.
 

@@ -19,3 +19,4 @@ covered by SPEC.md.
 | [0005](0005-find-similar-cases-heuristic.md) | find_similar_cases is a heuristic, not embeddings |
 | [0006](0006-s3-storage-self-hosted-minio.md) | S3 image storage: boto3 against a configurable endpoint, self-hosted via MinIO for dev |
 | [0007](0007-poller-service-design.md) | Poller service: instance state, bounded runs for testability, cycle-boundary shutdown |
+| [0008](0008-env-var-thresholds.md) | Decision/Policy thresholds: env vars, not a DB config table |
