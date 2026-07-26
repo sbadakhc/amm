@@ -12,6 +12,8 @@ from agents.decision_agent import run_decision_agent
 from agents.evidence_agent import run_evidence_agent
 from agents.policy_agent import run_policy_agent
 from agents.safety_agent import run_safety_agent
+from embeddings import MODEL as EMBEDDING_MODEL
+from embeddings import embed_text
 from intake import to_canonical_document
 
 DECISION_TO_STATUS = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "REVIEW": "PENDING_REVIEW"}
@@ -33,21 +35,26 @@ def _record_failure(listing_id: str, stage: str, error: Exception) -> None:
 
 
 def run_fusion(canonical_doc: dict) -> dict:
-    """Runs Evidence/Consistency/Safety in parallel, then Policy, then Decision.
-    Returns the final DecisionAgent artifact. Does not touch listing status or
-    persistence beyond writing the artifacts themselves — callers decide what to do
-    with the resulting status transition."""
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    """Runs Evidence/Consistency/Safety in parallel (plus the find_similar_cases
+    embedding, §6/§10 — doesn't feed the decision, just needs the same canonical
+    doc, so it fans out alongside the agents rather than as a separate pass), then
+    Policy, then Decision. Returns the final DecisionAgent artifact. Does not touch
+    listing status beyond writing the artifacts/embedding themselves — callers decide
+    what to do with the resulting status transition."""
+    with ThreadPoolExecutor(max_workers=4) as pool:
         evidence_future = pool.submit(run_evidence_agent, canonical_doc)
         consistency_future = pool.submit(run_consistency_agent, canonical_doc)
         safety_future = pool.submit(run_safety_agent, canonical_doc)
+        embedding_future = pool.submit(embed_text, f"{canonical_doc['title']}. {canonical_doc['description']}")
         evidence = evidence_future.result()
         consistency = consistency_future.result()
         safety = safety_future.result()
+        embedding = embedding_future.result()
 
     db.insert_artifact(evidence)
     db.insert_artifact(consistency)
     db.insert_artifact(safety)
+    db.upsert_listing_embedding(canonical_doc["listingId"], EMBEDDING_MODEL, embedding)
 
     policy = run_policy_agent(canonical_doc, evidence["payload"], consistency["payload"], safety["payload"])
     db.insert_artifact(policy)

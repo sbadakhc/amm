@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Throwaway Postgres for local testing -- see AGENTS.md §5.
+# Throwaway Postgres (pgvector/pgvector:pg16 -- pgvector needed for
+# listing_embeddings, §6) for local testing -- see AGENTS.md §5.
 #
 # Usage:
 #   scripts/dev-db.sh up      # start container, apply schema.sql, print DATABASE_URL
@@ -30,7 +31,7 @@ case "$cmd" in
     fi
     docker run -d --name "$CONTAINER_NAME" --network bridge \
       -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD="$DB_PASSWORD" -e POSTGRES_DB="$DB_NAME" \
-      -p "${PORT}:5432" postgres:16-alpine >/dev/null
+      -p "${PORT}:5432" pgvector/pgvector:pg16 >/dev/null
 
     echo "Waiting for Postgres to accept connections..."
     for _ in $(seq 1 15); do

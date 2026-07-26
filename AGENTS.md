@@ -35,9 +35,9 @@ as they were found. Keep that habit:
 - When implementing or changing an agent, test it against a real model call (this
   project uses NVIDIA's hosted API) and real sample data (`listings.json`), not just a
   mock.
-- When a database change is involved, verify against a real Postgres instance (a
-  throwaway Docker container is fine -- `postgres:16-alpine`, apply `schema.sql`,
-  tear it down after) rather than reasoning about the SQL in the abstract.
+- When a database change is involved, verify against a real Postgres instance
+  (`scripts/dev-db.sh up`, apply `schema.sql`, `... down` after) rather than reasoning
+  about the SQL in the abstract.
 - If reality disagrees with SPEC.md, update SPEC.md in the same change -- don't leave
   the spec describing something that isn't what the code does.
 
@@ -70,14 +70,12 @@ python3 agents/safety_agent.py '{"listingId": "...", "title": "...", "descriptio
 python3 -c "from pipeline import poll_and_process; print(poll_and_process())"
 ```
 
-Throwaway Postgres for testing:
+Throwaway Postgres for testing (pgvector/pgvector:pg16 -- needed for
+`listing_embeddings`, §6):
 ```bash
-docker run -d --name amm-postgres --network bridge \
-  -e POSTGRES_USER=amm -e POSTGRES_PASSWORD=amm -e POSTGRES_DB=moderator \
-  -p 55432:5432 postgres:16-alpine
-psql "postgresql://amm:amm@127.0.0.1:55432/moderator" -f schema.sql
+scripts/dev-db.sh up      # starts the container, applies schema.sql
 # ... test ...
-docker rm -f amm-postgres
+scripts/dev-db.sh down
 ```
 
 ## 6. Definition of Done

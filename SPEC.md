@@ -489,9 +489,16 @@ acting. See `docs/decisions/0009-moderator-auth-registry.md`.
 `approve_listing`/`reject_listing` are thin wrappers over `record_decision` — all three
 append a new `DecisionAgent` artifact and move the listing to the matching terminal
 status; the two convenience wrappers just fix `decision` to `APPROVE`/`REJECT` and set
-`moderator` from `moderatorId`. `find_similar_cases` is a same-category-plus-
-overlapping-policy-rules heuristic, not semantic/embedding similarity — there's no
-vector search in scope; revisit if case volume outgrows what the heuristic ranks well.
+`moderator` from `moderatorId`.
+
+**`find_similar_cases`** ranks by real semantic similarity: a text embedding
+(title + description, model `nvidia/llama-nemotron-embed-1b-v2`, `embeddings.py`) is
+computed for each listing during `pipeline.run_fusion` and stored in Postgres via
+`pgvector` (`listing_embeddings` table); the tool queries nearest neighbors by cosine
+distance (`<=>`). Replaces the category+rule-overlap heuristic this project shipped
+first (`docs/decisions/0005`, superseded by `docs/decisions/0010`). A listing that
+hasn't been through the pipeline yet has no embedding and `find_similar_cases` raises
+rather than silently returning nothing.
 
 ---
 

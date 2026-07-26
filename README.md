@@ -38,8 +38,10 @@ Single process, async fan-out/fan-in — no broker, no separate API service.
 
 ## Tech Stack
 
-- **Postgres** — the raw listing row plus an append-only artifact log (one immutable
-  row per agent run); see SPEC.md §5.
+- **Postgres** (with `pgvector`) — the raw listing row, an append-only artifact log
+  (one immutable row per agent run, SPEC.md §5), the moderator registry, and listing
+  embeddings for `find_similar_cases` all live in the same instance — no separate
+  vector database.
 - **Claude Code** — orchestration and the Moderator CLI. There's no separate chat
   loop; the CLI is a plain Python tool layer (`cli/tools.py`) driven by talking to
   Claude Code directly (see `docs/decisions/0002-cli-tool-layer-not-chat-loop.md`).
@@ -54,6 +56,8 @@ Single process, async fan-out/fan-in — no broker, no separate API service.
     detection, and the three image-based consistency checks.
   - **Consistency Agent**'s text check: `mistralai/mistral-nemotron` — the
     title-vs-description contradiction check.
+  - **`find_similar_cases`**: `nvidia/llama-nemotron-embed-1b-v2` (text embeddings,
+    `embeddings.py`), stored/queried via `pgvector`.
   - Policy Agent and Decision Agent are deterministic rule logic — no model call.
 
 ## Repo Layout
@@ -66,6 +70,7 @@ db.py                 Postgres access: atomic claim/lock (§2.1), artifact log (
 pipeline.py           orchestration: parallel fan-out -> Policy -> Decision
 service.py            long-running poller + stale-claim sweep (§7)
 images.py             shared file:// / s3:// image fetch helper
+embeddings.py          text-embedding helper for find_similar_cases (§6)
 generate_synthetic_data.py   synthetic listing generator (5 demo scenarios)
 listings.json, images/       sample generated output
 schema.sql            Postgres schema (listings + artifacts)
@@ -169,6 +174,7 @@ pending = tools.list_pending()
 listing_id = pending[0]["listing_id"]
 
 tools.explain_case(listing_id)          # every agent's artifact, in order
+tools.find_similar_cases(listing_id)    # nearest neighbors by real embedding similarity
 tools.approve_listing(listing_id, "mod-1", "Looks fine on manual review.")
 ```
 
