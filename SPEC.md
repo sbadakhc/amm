@@ -474,6 +474,16 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 | `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
 | `whoami(moderatorId?)` | — | moderator's own registry entry |
 
+**Inspecting a case's images.** `show_images` returns raw `s3://`/`file://` URLs, not
+viewable pixels. `.claude/skills/inspect-listing/` (invoked as `/inspect-listing
+<listingId>` or proactively when a moderator asks to see a case) runs
+`scripts/inspect_listing.py`, which prints the listing's text + latest agent artifacts
+and fetches each image to a local temp file; Claude Code then reads each path with its
+own Read tool, rendering images inline one at a time, paced by the moderator. Not an
+external OS image viewer -- see `docs/decisions/0011-inspect-listing-inline-read-not-external-viewer.md`
+for why (WSL interop disabled, no display server on the dev host, and the inline
+approach is portable to any host regardless).
+
 **Moderator identity.** `moderatorId` is checked against a `moderators` table
 (`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,
 no tokens, no login flow, because the CLI is a tool layer driven by a trusted operator
