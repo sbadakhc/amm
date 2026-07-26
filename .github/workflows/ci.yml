@@ -10,6 +10,24 @@ jobs:
   checks:
     name: pre-commit + tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector, not plain postgres -- listing_embeddings needs the vector
+        # extension (ADR 0010), same image as scripts/dev-db.sh uses locally.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: amm
+          POSTGRES_PASSWORD: amm
+          POSTGRES_DB: moderator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://amm:amm@localhost:5432/moderator
     steps:
       - uses: actions/checkout@v4
 
@@ -20,10 +38,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Apply schema
+        run: psql "$DATABASE_URL" -f schema.sql
+
       - name: Run pre-commit hooks
         uses: pre-commit/action@v3.0.1
 
-      - name: Run offline test suite
-        # No DATABASE_URL/NVIDIA_API_KEY in CI -- integration tests skip themselves
-        # (conftest.py), unit tests mock every model call.
+      - name: Run test suite
+        # DATABASE_URL is set above, so integration tests run for real here, not
+        # skipped. No NVIDIA_API_KEY needed -- none of them call a live model
+        # (they exercise db.py/cli/tools.py directly, not pipeline.run_fusion).
         run: pytest -v
