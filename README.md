@@ -64,6 +64,8 @@ cli/tools.py          Moderator CLI tools (§6): list_pending, explain_case, app
 intake.py             raw DB row -> canonical document mapping (§3.1)
 db.py                 Postgres access: atomic claim/lock (§2.1), artifact log (§5)
 pipeline.py           orchestration: parallel fan-out -> Policy -> Decision
+service.py            long-running poller + stale-claim sweep (§7)
+images.py             shared file:// / s3:// image fetch helper
 generate_synthetic_data.py   synthetic listing generator (5 demo scenarios)
 listings.json, images/       sample generated output
 schema.sql            Postgres schema (listings + artifacts)
@@ -137,13 +139,22 @@ python3 agents/safety_agent.py '{"listingId": "LST-DEMO", "title": "Tactical Com
 
 ### 6. Run the full pipeline
 
+One-shot (processes whatever's pending right now, then returns):
+
 ```bash
 python3 -c "from pipeline import poll_and_process; print(poll_and_process())"
 ```
 
-Claims every `PENDING_MODERATION` listing, fans out to Evidence/Consistency/Safety in
-parallel, then Policy, then Decision, writing one artifact per agent run and updating
-each listing's status (`APPROVED` / `REJECTED` / `PENDING_REVIEW`).
+Or as a long-running service -- polls for new `PENDING_MODERATION` listings and
+periodically sweeps stale claims (§2.1), stops cleanly on Ctrl-C:
+
+```bash
+python3 service.py
+```
+
+Either way, claims listings, fans out to Evidence/Consistency/Safety in parallel, then
+Policy, then Decision, writing one artifact per agent run and updating each listing's
+status (`APPROVED` / `REJECTED` / `PENDING_REVIEW`).
 
 ### 7. Work the review queue via the CLI tools
 
