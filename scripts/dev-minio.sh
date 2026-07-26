@@ -4,7 +4,7 @@
 #
 # Usage:
 #   scripts/dev-minio.sh up                  # start container, create bucket, print S3 env vars
-#   scripts/dev-minio.sh upload-demo-images  # push images/*.png, print their s3:// URLs
+#   scripts/dev-minio.sh upload-demo-images  # push images/*.{png,jpg}, print their s3:// URLs
 #   scripts/dev-minio.sh down                # stop and remove the container
 #
 # Uses boto3 directly against MinIO's published host port rather than a second
@@ -61,7 +61,10 @@ except c.exceptions.BucketAlreadyOwnedByYou:
     AWS_ACCESS_KEY_ID="$ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SECRET_KEY" python3 -c "
 import boto3, glob, os
 c = boto3.client('s3', endpoint_url='${ENDPOINT_URL}', region_name='us-east-1')
-for path in sorted(glob.glob('images/*.png')):
+# Real photos (docs/decisions/0013) use .jpg, synthetic placeholders use .png --
+# both need uploading, not just one.
+paths = sorted(glob.glob('images/*.png') + glob.glob('images/*.jpg'))
+for path in paths:
     key = os.path.basename(path)
     c.upload_file(path, '${BUCKET}', key)
     print(f's3://${BUCKET}/{key}')
