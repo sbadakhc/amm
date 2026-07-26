@@ -52,6 +52,7 @@ def seeded_listing():
 
     with db.get_conn() as conn:
         cur = conn.cursor()
+        cur.execute("DELETE FROM listing_embeddings WHERE listing_id = %s", (listing_id,))
         cur.execute("DELETE FROM artifacts WHERE listing_id = %s", (listing_id,))
         cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
         conn.commit()
@@ -139,3 +140,74 @@ def test_create_moderator_upserts_on_conflict(seeded_moderator):
     moderator = db.get_moderator(seeded_moderator)
     assert moderator["name"] == "Renamed"
     assert moderator["active"] is False
+
+
+def _unit_vector(nonzero_index: int, dim: int = 2048) -> list[float]:
+    """A deterministic unit vector for testing pgvector cosine distance without a
+    real embedding call: identical index -> distance 0, different index -> distance
+    1 (orthogonal), no real API dependency needed to test the SQL/storage mechanics
+    (live model behavior was verified separately, see docs/decisions/0010)."""
+    v = [0.0] * dim
+    v[nonzero_index] = 1.0
+    return v
+
+
+@pytest.fixture
+def three_embedded_listings():
+    """Three listings: A and B share an embedding direction (distance 0 from each
+    other), C is orthogonal to both (distance 1)."""
+    ids = [f"LST-EMB-{uuid.uuid4().hex[:6].upper()}" for _ in range(3)]
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        for listing_id in ids:
+            cur.execute(
+                """
+                INSERT INTO listings
+                    (listing_id, seller, title, description, category, price, quantity,
+                     condition, brand, model, sku, images, attributes, shipping, status)
+                VALUES (%s, '{}', 'test', 'test', '{"id":"x"}', '{}', 1, 'new', 'x', 'x', 'x', '[]', '{}', '{}', 'PENDING_MODERATION')
+                """,
+                (listing_id,),
+            )
+        conn.commit()
+
+    db.upsert_listing_embedding(ids[0], "test-model", _unit_vector(0))
+    db.upsert_listing_embedding(ids[1], "test-model", _unit_vector(0))
+    db.upsert_listing_embedding(ids[2], "test-model", _unit_vector(1))
+
+    yield ids
+
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        for listing_id in ids:
+            cur.execute("DELETE FROM listing_embeddings WHERE listing_id = %s", (listing_id,))
+            cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
+        conn.commit()
+
+
+def test_get_listing_embedding(three_embedded_listings):
+    listing_a = three_embedded_listings[0]
+    embedding = db.get_listing_embedding(listing_a)
+    assert embedding["model"] == "test-model"
+    assert len(embedding["embedding"]) == 2048
+
+
+def test_find_similar_by_embedding_ranks_by_cosine_distance(three_embedded_listings):
+    listing_a, listing_b, listing_c = three_embedded_listings
+
+    results = db.find_similar_by_embedding(listing_a, k=5)
+    result_ids = [r["listing_id"] for r in results]
+
+    assert result_ids[0] == listing_b  # identical direction -> distance 0
+    assert result_ids[1] == listing_c  # orthogonal -> distance 1
+    assert results[0]["distance"] < results[1]["distance"]
+    assert listing_a not in result_ids  # excludes itself
+
+
+def test_upsert_listing_embedding_overwrites(three_embedded_listings):
+    listing_a, _, listing_c = three_embedded_listings
+    db.upsert_listing_embedding(listing_a, "test-model-v2", _unit_vector(1))  # now matches C's direction
+
+    results = db.find_similar_by_embedding(listing_a, k=5)
+    assert results[0]["listing_id"] == listing_c
+    assert results[0]["distance"] == 0.0

@@ -1,7 +1,8 @@
 # 0005. find_similar_cases is a category + rule-overlap heuristic, not embeddings
 
 ## Status
-Accepted -- revisit if case volume grows
+Superseded by [0010](0010-embeddings-for-find-similar-cases.md) -- kept for the
+reasoning trail, not current behavior.
 
 ## Context
 SPEC.md §6 lists `find_similar_cases(listingId, k?)` among the moderator CLI tools

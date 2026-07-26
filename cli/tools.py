@@ -62,32 +62,18 @@ def search_policy(query: str) -> list[dict]:
 
 
 def find_similar_cases(listing_id: str, k: int = 5) -> list[dict]:
-    """`find_similar_cases(listingId, k)` (§6). Heuristic, not semantic similarity: same
-    category plus overlapping matched policy rules on the latest decision, ranked by
-    rule overlap then recency. No embeddings/vector search in scope yet — swap this for
-    one if case volume grows past what the heuristic handles well."""
+    """`find_similar_cases(listingId, k)` (§6). Real semantic similarity via text
+    embeddings (title+description, `embeddings.py`) stored and queried in Postgres
+    with pgvector's cosine distance operator -- replaces the category+rule-overlap
+    heuristic (docs/decisions/0005, superseded by 0010). The embedding is computed
+    once per listing during `pipeline.run_fusion`; a listing that hasn't been through
+    the pipeline yet has no embedding to compare against."""
     row = db.get_listing_row(listing_id)
     if row is None:
         raise ValueError(f"No such listing: {listing_id}")
-    category_id = row["category"]["id"]
-    own_decision = db.latest_artifact(listing_id, "DecisionAgent")
-    own_rules = set(own_decision["payload"]["policyRules"]) if own_decision else set()
-
-    candidates = db.list_listings_by_status("PENDING_REVIEW", category_id=category_id) + \
-        db.list_listings_by_status("APPROVED", category_id=category_id) + \
-        db.list_listings_by_status("REJECTED", category_id=category_id)
-
-    scored = []
-    for candidate in candidates:
-        if candidate["listing_id"] == listing_id:
-            continue
-        decision = db.latest_artifact(candidate["listing_id"], "DecisionAgent")
-        rules = set(decision["payload"]["policyRules"]) if decision else set()
-        overlap = len(rules & own_rules)
-        scored.append((overlap, candidate["created_at"], candidate))
-
-    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return [c for _, _, c in scored[:k]]
+    if db.get_listing_embedding(listing_id) is None:
+        raise ValueError(f"No embedding computed yet for listing {listing_id} — run the pipeline on it first")
+    return db.find_similar_by_embedding(listing_id, k=k)
 
 
 def _resolve_moderator(moderator_id: str | None) -> str:

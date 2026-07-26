@@ -51,6 +51,7 @@ def seeded_listing():
 
     with db.get_conn() as conn:
         cur = conn.cursor()
+        cur.execute("DELETE FROM listing_embeddings WHERE listing_id = %s", (listing_id,))
         cur.execute("DELETE FROM artifacts WHERE listing_id = %s", (listing_id,))
         cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
         conn.commit()
@@ -114,3 +115,40 @@ def test_whoami_returns_own_registry_entry(active_moderator):
     result = tools.whoami(active_moderator)
     assert result["moderator_id"] == active_moderator
     assert result["active"] is True
+
+
+def test_find_similar_cases_without_embedding_raises(seeded_listing):
+    with pytest.raises(ValueError, match="No embedding computed yet"):
+        tools.find_similar_cases(seeded_listing)
+
+
+def test_find_similar_cases_ranks_by_embedding_distance(seeded_listing):
+    other_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO listings
+                (listing_id, seller, title, description, category, price, quantity,
+                 condition, brand, model, sku, images, attributes, shipping, status)
+            VALUES (%s, '{}', 'test', 'test', '{"id":"x"}', '{}', 1, 'new', 'x', 'x', 'x', '[]', '{}', '{}', 'PENDING_REVIEW')
+            """,
+            (other_id,),
+        )
+        conn.commit()
+
+    vec = [0.0] * 2048
+    vec[0] = 1.0
+    db.upsert_listing_embedding(seeded_listing, "test-model", vec)
+    db.upsert_listing_embedding(other_id, "test-model", vec)
+
+    try:
+        results = tools.find_similar_cases(seeded_listing)
+        assert results[0]["listing_id"] == other_id
+        assert results[0]["distance"] == 0.0
+    finally:
+        with db.get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM listing_embeddings WHERE listing_id = %s", (other_id,))
+            cur.execute("DELETE FROM listings WHERE listing_id = %s", (other_id,))
+            conn.commit()

@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 
 import psycopg2
 import psycopg2.extras
+from pgvector.psycopg2 import register_vector
 
 
 @contextmanager
 def get_conn():
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    register_vector(conn)  # adapts Python list[float] <-> pgvector's `vector` type
     try:
         yield conn
     finally:
@@ -171,3 +173,51 @@ def create_moderator(moderator_id: str, name: str, active: bool = True) -> None:
             (moderator_id, name, active),
         )
         conn.commit()
+
+
+def upsert_listing_embedding(listing_id: str, model: str, embedding: list[float]) -> None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO listing_embeddings (listing_id, model, embedding)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (listing_id) DO UPDATE
+                SET model = EXCLUDED.model, embedding = EXCLUDED.embedding, produced_at = now()
+            """,
+            (listing_id, model, embedding),
+        )
+        conn.commit()
+
+
+def get_listing_embedding(listing_id: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM listing_embeddings WHERE listing_id = %s", (listing_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["embedding"] = result["embedding"].to_list()  # pgvector.Vector -> list[float]
+        return result
+
+
+def find_similar_by_embedding(listing_id: str, k: int = 5) -> list[dict]:
+    """Nearest neighbors by cosine distance (pgvector's `<=>` operator, §6), excluding
+    the listing itself. Returns full listing rows plus a `distance` column (lower =
+    more similar, range [0, 2] for cosine distance)."""
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT l.*, (le2.embedding <=> le1.embedding) AS distance
+            FROM listing_embeddings le1
+            JOIN listing_embeddings le2 ON le2.listing_id != le1.listing_id
+            JOIN listings l ON l.listing_id = le2.listing_id
+            WHERE le1.listing_id = %s
+            ORDER BY distance ASC
+            LIMIT %s
+            """,
+            (listing_id, k),
+        )
+        return [dict(r) for r in cur.fetchall()]

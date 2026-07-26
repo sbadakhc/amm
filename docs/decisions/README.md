@@ -16,8 +16,9 @@ covered by SPEC.md.
 | [0002](0002-cli-tool-layer-not-chat-loop.md) | Moderator CLI is a Python tool layer, not a standalone chat loop |
 | [0003](0003-decision-fusion-formula.md) | Decision fusion is a deterministic 3-step formula |
 | [0004](0004-locking-model.md) | Claim listings with `FOR UPDATE SKIP LOCKED`, no broker |
-| [0005](0005-find-similar-cases-heuristic.md) | find_similar_cases is a heuristic, not embeddings |
+| [0005](0005-find-similar-cases-heuristic.md) | find_similar_cases is a heuristic, not embeddings *(superseded by 0010)* |
 | [0006](0006-s3-storage-self-hosted-minio.md) | S3 image storage: boto3 against a configurable endpoint, self-hosted via MinIO for dev |
 | [0007](0007-poller-service-design.md) | Poller service: instance state, bounded runs for testability, cycle-boundary shutdown |
 | [0008](0008-env-var-thresholds.md) | Decision/Policy thresholds: env vars, not a DB config table |
 | [0009](0009-moderator-auth-registry.md) | Moderator identity: known-registry authorization, not authentication |
+| [0010](0010-embeddings-for-find-similar-cases.md) | find_similar_cases: real embeddings via pgvector, superseding the heuristic |
