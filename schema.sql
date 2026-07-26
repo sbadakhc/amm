@@ -36,3 +36,12 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_artifacts_listing ON artifacts(listing_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_agent ON artifacts(listing_id, agent);
+
+-- Known-moderator registry (§6). Authorization only -- no passwords/tokens; see
+-- docs/decisions/0009-moderator-auth-registry.md.
+CREATE TABLE IF NOT EXISTS moderators (
+    moderator_id    TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    active          BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);

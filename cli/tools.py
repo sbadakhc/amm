@@ -4,6 +4,7 @@ a moderator (or Claude Code on their behalf) calls these functions; nothing here
 to Postgres except through them.
 """
 
+import os
 from datetime import datetime, timezone
 
 import db
@@ -89,6 +90,29 @@ def find_similar_cases(listing_id: str, k: int = 5) -> list[dict]:
     return [c for _, _, c in scored[:k]]
 
 
+def _resolve_moderator(moderator_id: str | None) -> str:
+    """Authorization, not authentication (§6, docs/decisions/0009): checks the given
+    (or MODERATOR_ID env var-defaulted, like git's user.name) moderator_id is a known,
+    active entry in the moderators table. No passwords, no tokens."""
+    moderator_id = moderator_id or os.environ.get("MODERATOR_ID")
+    if not moderator_id:
+        raise ValueError("moderator_id not provided and MODERATOR_ID env var not set")
+    moderator = db.get_moderator(moderator_id)
+    if moderator is None:
+        raise ValueError(f"Unknown moderator: {moderator_id!r}")
+    if not moderator["active"]:
+        raise ValueError(f"Moderator {moderator_id!r} is not active")
+    return moderator_id
+
+
+def whoami(moderator_id: str | None = None) -> dict:
+    """Not in SPEC.md's original §6 tool table -- added alongside the moderator
+    registry so a moderator can confirm their own identity/active status before
+    acting on a case."""
+    moderator_id = _resolve_moderator(moderator_id)
+    return db.get_moderator(moderator_id)
+
+
 def record_decision(listing_id: str, decision: str, reason: str, moderator_id: str | None = None) -> dict:
     """`record_decision(listingId, decision, reason)` (§6) — appends a new DecisionAgent
     artifact (moderator override, §5) rather than editing the automated one, and moves
@@ -96,6 +120,7 @@ def record_decision(listing_id: str, decision: str, reason: str, moderator_id: s
     if decision not in DECISION_TO_STATUS:
         raise ValueError(f"decision must be one of {list(DECISION_TO_STATUS)}, got {decision!r}")
 
+    moderator_id = _resolve_moderator(moderator_id)
     previous = db.latest_artifact(listing_id, "DecisionAgent")
     artifact = {
         "listingId": listing_id,
@@ -116,14 +141,20 @@ def record_decision(listing_id: str, decision: str, reason: str, moderator_id: s
     return inserted
 
 
-def approve_listing(listing_id: str, moderator_id: str, note: str | None = None) -> dict:
-    """`approve_listing(listingId, moderatorId, note?)` (§6)."""
+def approve_listing(listing_id: str, moderator_id: str | None = None, note: str | None = None) -> dict:
+    """`approve_listing(listingId, moderatorId, note?)` (§6). `moderator_id` defaults to
+    the `MODERATOR_ID` env var when not given explicitly."""
     record_decision(listing_id, "APPROVE", note or "Approved by moderator.", moderator_id)
     return db.get_listing_row(listing_id)
 
 
-def reject_listing(listing_id: str, moderator_id: str, reason: str) -> dict:
-    """`reject_listing(listingId, moderatorId, reason)` (§6)."""
+def reject_listing(listing_id: str, moderator_id: str | None = None, reason: str | None = None) -> dict:
+    """`reject_listing(listingId, moderatorId, reason)` (§6) — matches the documented
+    positional order; `reason` is still required at runtime (not truly optional, just
+    can't have a Python default positioned after `moderator_id`'s). `moderator_id`
+    defaults to the `MODERATOR_ID` env var when not given explicitly."""
+    if reason is None:
+        raise ValueError("reason is required")
     record_decision(listing_id, "REJECT", reason, moderator_id)
     return db.get_listing_row(listing_id)
 

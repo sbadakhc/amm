@@ -196,6 +196,23 @@ def seed_postgres(listings: list[dict]) -> None:
     print(f"Inserted {len(listings)} listings into Postgres.")
 
 
+# Demo moderators for the CLI's registry (§6). One inactive, to exercise the
+# rejection path in cli.tools._resolve_moderator.
+MODERATORS = [
+    {"moderator_id": "mod-1", "name": "Alex Moderator", "active": True},
+    {"moderator_id": "mod-2", "name": "Priya Reviewer", "active": True},
+    {"moderator_id": "mod-inactive", "name": "Former Moderator", "active": False},
+]
+
+
+def seed_moderators() -> None:
+    import db
+
+    for m in MODERATORS:
+        db.create_moderator(m["moderator_id"], m["name"], m["active"])
+    print(f"Seeded {len(MODERATORS)} moderators into Postgres.")
+
+
 def main():
     listings = build_listings()
 
@@ -206,6 +223,7 @@ def main():
 
     if os.environ.get("DATABASE_URL"):
         seed_postgres(listings)
+        seed_moderators()
     else:
         print("DATABASE_URL not set — dry run only, nothing written to Postgres.")
         print('Set it and re-run, e.g.:')

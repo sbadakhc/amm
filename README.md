@@ -94,6 +94,8 @@ cp .env.example .env
 Fill in `.env`:
 - `DATABASE_URL` — see step 3 for a one-command local Postgres
 - `NVIDIA_API_KEY` — get one at https://build.nvidia.com
+- `MODERATOR_ID` (optional) — default moderator identity for the CLI tools in step 7,
+  e.g. `mod-1` (one of the demo moderators seeded in step 4)
 
 ### 3. Spin up a local Postgres
 
@@ -113,7 +115,9 @@ python3 generate_synthetic_data.py
 
 Writes `listings.json` + `images/` and inserts 5 demo listings into Postgres, each
 exercising a different branch of the pipeline (clean, weapon, counterfeit brand,
-inconsistent listing, risky seller history).
+inconsistent listing, risky seller history) — plus 3 demo moderators (`mod-1`,
+`mod-2`, and an inactive `mod-inactive` for exercising the rejection path) into the
+`moderators` table used by the CLI's moderator authorization (§6).
 
 ### 5. Run a single agent standalone
 

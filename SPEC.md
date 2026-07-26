@@ -465,13 +465,26 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 | `list_pending()` | `{ limit?, category? }` | `Listing[]` |
 | `get_listing(listingId)` | `{ listingId }` | full document + agent outputs |
 | `explain_case(listingId)` | `{ listingId }` | all artifacts for the listing, per-agent |
-| `approve_listing(listingId, moderatorId, note?)` | — | updated status |
-| `reject_listing(listingId, moderatorId, reason)` | — | updated status |
+| `approve_listing(listingId, moderatorId?, note?)` | — | updated status |
+| `reject_listing(listingId, moderatorId?, reason)` | — | updated status |
 | `search_policy(query)` | `{ query }` | matching rule(s) |
 | `find_similar_cases(listingId, k?)` | — | `Case[]` |
 | `show_images(listingId)` | — | image URLs |
 | `rerun_analysis(listingId, agent?)` | — | new agent output |
 | `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
+| `whoami(moderatorId?)` | — | moderator's own registry entry |
+
+**Moderator identity.** `moderatorId` is checked against a `moderators` table
+(`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,
+no tokens, no login flow, because the CLI is a tool layer driven by a trusted operator
+through Claude Code (§2 note in §6's intro), not a network-exposed service with
+untrusted callers. `approve_listing`/`reject_listing`/`record_decision` reject an
+unknown or inactive `moderatorId` outright. When omitted, `moderatorId` defaults to the
+`MODERATOR_ID` environment variable (same convention as git's `user.name`) — still
+validated against the table, an unset/unknown/inactive default is still rejected, just
+without needing to pass it on every call. `whoami()` returns the resolved moderator's
+own registry row, letting a moderator confirm their identity/active status before
+acting. See `docs/decisions/0009-moderator-auth-registry.md`.
 
 `approve_listing`/`reject_listing` are thin wrappers over `record_decision` — all three
 append a new `DecisionAgent` artifact and move the listing to the matching terminal

@@ -1,0 +1,116 @@
+"""
+Requires a real Postgres instance -- see scripts/dev-db.sh. Skipped automatically if
+DATABASE_URL isn't set (conftest.py). Exercises the moderator authorization added in
+docs/decisions/0009 against a real moderators table, not mocks.
+"""
+
+import json
+import uuid
+
+import pytest
+
+import db
+from cli import tools
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture
+def seeded_listing():
+    listing_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO listings
+                (listing_id, seller, title, description, category, price, quantity,
+                 condition, brand, model, sku, images, attributes, shipping, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                listing_id,
+                json.dumps({"sellerId": "SUP-TEST", "verified": True, "previousViolations": 0}),
+                "Test Listing",
+                "A test listing.",
+                json.dumps({"id": "electronics.mobile", "name": "Mobile Phones"}),
+                json.dumps({"amount": 1.0, "currency": "GBP"}),
+                1,
+                "new",
+                "Apple",
+                "Test",
+                "SKU-TEST",
+                json.dumps([]),
+                json.dumps({}),
+                json.dumps({}),
+                "PENDING_REVIEW",
+            ),
+        )
+        conn.commit()
+
+    yield listing_id
+
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM artifacts WHERE listing_id = %s", (listing_id,))
+        cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
+        conn.commit()
+
+
+@pytest.fixture
+def active_moderator():
+    moderator_id = f"mod-active-{uuid.uuid4().hex[:6]}"
+    db.create_moderator(moderator_id, "Active Moderator", active=True)
+    yield moderator_id
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM moderators WHERE moderator_id = %s", (moderator_id,))
+        conn.commit()
+
+
+@pytest.fixture
+def inactive_moderator():
+    moderator_id = f"mod-inactive-{uuid.uuid4().hex[:6]}"
+    db.create_moderator(moderator_id, "Inactive Moderator", active=False)
+    yield moderator_id
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM moderators WHERE moderator_id = %s", (moderator_id,))
+        conn.commit()
+
+
+def test_approve_listing_with_active_moderator_succeeds(seeded_listing, active_moderator):
+    row = tools.approve_listing(seeded_listing, active_moderator, "Looks fine.")
+    assert row["status"] == "APPROVED"
+
+
+def test_approve_listing_with_unknown_moderator_raises(seeded_listing):
+    with pytest.raises(ValueError, match="Unknown moderator"):
+        tools.approve_listing(seeded_listing, "no-such-moderator", "note")
+
+
+def test_approve_listing_with_inactive_moderator_raises(seeded_listing, inactive_moderator):
+    with pytest.raises(ValueError, match="not active"):
+        tools.approve_listing(seeded_listing, inactive_moderator, "note")
+
+
+def test_reject_listing_requires_reason(seeded_listing, active_moderator):
+    with pytest.raises(ValueError, match="reason is required"):
+        tools.reject_listing(seeded_listing, active_moderator)
+
+
+def test_moderator_id_falls_back_to_env_var(monkeypatch, seeded_listing, active_moderator):
+    monkeypatch.setenv("MODERATOR_ID", active_moderator)
+    row = tools.approve_listing(seeded_listing, note="Approved via env default.")
+    assert row["status"] == "APPROVED"
+
+
+def test_missing_moderator_id_and_env_var_raises(monkeypatch, seeded_listing):
+    monkeypatch.delenv("MODERATOR_ID", raising=False)
+    with pytest.raises(ValueError, match="MODERATOR_ID"):
+        tools.approve_listing(seeded_listing, note="no moderator given")
+
+
+def test_whoami_returns_own_registry_entry(active_moderator):
+    result = tools.whoami(active_moderator)
+    assert result["moderator_id"] == active_moderator
+    assert result["active"] is True
