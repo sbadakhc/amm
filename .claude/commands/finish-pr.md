@@ -11,8 +11,12 @@ For the PR in question (ask which one if ambiguous, or take it from $ARGUMENTS):
 
 1. Confirm the state is exactly `MERGED`: `gh pr view <N> --json state`
    - If it is `OPEN` or `CLOSED`, STOP and report -- do not delete anything
-2. Sync: `git checkout dev && git pull origin dev` (rebase `dev` onto `main` if this
-   repo's workflow merges PRs into `main` directly rather than into `dev`)
+2. Sync: `git checkout dev && git fetch origin && git merge origin/main --ff-only`
+   (this repo merges PRs into `main` directly; `dev` fast-forwards to match).
+   **Always `git fetch origin` immediately before the `--ff-only` merge** -- a stale
+   local `origin/main` ref makes `--ff-only` silently report "Already up to date"
+   instead of erroring, which has actually happened in this repo (no failure signal,
+   just wrong state, caught only by a missing file downstream).
 3. Delete the merged branch locally (`git branch -d <branch>`) and on origin
    (`git push origin --delete <branch>`) -- it may already be auto-deleted, which is fine
 4. Close the linked issue if one exists, with a comment referencing the PR:

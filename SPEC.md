@@ -1,7 +1,7 @@
 ---
 project: agentic-marketplace-moderator
 type: system-spec
-version: 0.3.0
+version: 0.4.0
 status: draft
 audience: ai-coding-agent
 ---
@@ -479,8 +479,10 @@ Verified end-to-end against a real Postgres instance: seeded via
 `generate_synthetic_data.py`, processed with `pipeline.poll_and_process()`, then every
 tool below exercised against it (`list_pending`, `get_listing`, `explain_case`,
 `show_images`, `search_policy`, `find_similar_cases`, `approve_listing`,
-`reject_listing`, `rerun_analysis`) — moderator overrides confirmed to append a new
-`DecisionAgent` artifact rather than overwrite the automated one (§5).
+`reject_listing`, `rerun_analysis`, `escalate_case`, `request_appeal`,
+`resolve_appeal`, `list_seller_cases`, `suspend_seller`, `reinstate_seller`) —
+moderator overrides confirmed to append a new `DecisionAgent` artifact rather than
+overwrite the automated one (§5).
 
 **Example**
 ```
@@ -513,6 +515,45 @@ REVIEW (Confidence: 0.74)
 ```
 `explain case` reads straight off the artifact log (§5) — one section per agent artifact
 for that listing, in order — rather than a separate reasoning trace to maintain.
+
+**Example — escalation and appeal (§8)**
+```
+> this one looks like it needs a second opinion, escalate it
+
+escalate_case(98342, "Ambiguous branding, want a senior reviewer's read.")
+Listing 98342 → ESCALATED
+
+> [senior reviewer, later] reject it, counterfeit confirmed
+
+reject_listing(98342, "senior-mod", "Counterfeit confirmed on closer inspection.")
+Listing 98342 → REJECTED · seller violation_count: 4 → 5
+
+> the seller is disputing this one, they say they have proof of authenticity
+
+request_appeal(98342, "Seller provided proof of authenticity.")
+Listing 98342 → APPEAL_REQUESTED
+
+> resolve it, approve the appeal, proof checks out
+
+resolve_appeal(98342, "APPROVE", "Proof accepted, overturning rejection.")
+Listing 98342 → APPROVED · seller violation_count unchanged (not double-counted)
+
+> this seller has had one violation too many, show me everything from them
+
+list_seller_cases("SUP-1234")
+[5 listings: 3 approved, 1 rejected, 1 approved-on-appeal]
+
+> suspend their account
+
+suspend_seller("SUP-1234", "Repeated policy violations across multiple listings.")
+Seller SUP-1234 → SUSPENDED
+```
+Escalation and appeals reuse `APPROVED`/`REJECTED` as the actual outcome status
+rather than separate terminal states (§8.2) — the artifact log's `version` field
+(`"moderator-appeal-resolution"`) is what distinguishes an appeal outcome from a
+plain decision, not a different status value. There is no seller-facing surface in
+this system (§8.1) — `request_appeal` relays an appeal that reached a moderator
+through some other channel, it isn't triggered by the seller directly.
 
 **Tools**
 | Tool | In | Out |

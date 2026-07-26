@@ -67,6 +67,18 @@ grep -n "^MODEL\|^TEXT_MODEL\|^VISION_MODEL" agents/*.py
 grep -n "nvidia/\|mistralai/" SPEC.md
 ```
 
+Also spot-check §8 (escalation/appeals/seller accounts): confirm every status value
+`cli/tools.py` and `pipeline.DECISION_TO_STATUS` actually produce
+(`PENDING_MODERATION`/`PROCESSING`/`PENDING_REVIEW`/`ESCALATED`/`APPEAL_REQUESTED`/
+`APPROVED`/`REJECTED`) is reflected in SPEC.md §2's state machine diagram, and that
+§8.4's tool table's "Status" column (implemented vs. not) still matches what
+`cli/tools.py` actually defines:
+
+```bash
+grep -n "DECISION_TO_STATUS = {" -A 12 pipeline.py
+grep -n "^def " cli/tools.py
+```
+
 ### Step 6 -- Sample data sync
 
 ```bash
