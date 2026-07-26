@@ -1,13 +1,15 @@
 ---
 name: inspect-listing
 description: >
-  Lets a human moderator actually see a listing's images and read its full text/agent
+  Lets a human moderator actually see listing images and read full text/agent
   findings during review, instead of just getting raw s3:// URLs back from
-  show_images. Use whenever a moderator wants to look at a specific case -- triggers
-  on "inspect listing", "show me listing", "show images for", "let me see the images
-  for", "view listing", "open case", or invoked directly as /inspect-listing
-  <listingId>.
-argument-hint: <listingId>
+  show_images. Covers both a single-case deep dive and a queue-wide survey table
+  (status/decision/confidence/policy rules + image links). Use whenever a moderator
+  wants to look at a case or survey the queue -- triggers on "inspect listing", "show
+  me listing", "show images for", "let me see the images for", "view listing", "open
+  case", "what's pending", "show me the queue", "give me a table of listings", or
+  invoked directly as /inspect-listing [listingId].
+argument-hint: "[listingId | --queue]"
 compatibility: Claude Code
 metadata:
   category: moderation
@@ -38,10 +40,32 @@ offers two modes:
   on native Linux/macOS it just works directly. Gives an actual pop-up browser
   window/tab rather than inline rendering.
 
+There's also a **`--queue`** mode for surveying multiple listings at once, rather than
+deep-diving one case -- added after real moderator feedback that walking listings one
+at a time (each restarting the image server) was too much friction, with no
+visibility into decision/confidence, just images and text
+(`docs/decisions/0015`). It prints one markdown table (listing ID, title, status,
+decision, confidence, policy rules, an image link per row) backed by a single
+persistent image server covering every listing's images at once. Use this when the
+moderator wants to survey the queue ("what's pending", "show me everything", "give me
+a table of ..."), and fall back to per-listing `--serve`/inline for a deep dive once
+they've picked a specific case from the table.
+
 ## Steps
 
+**Surveying the queue** (multiple listings at once):
+1. Run `python3 scripts/inspect_listing.py --queue` (optionally `--status
+   PENDING_REVIEW` or another comma-separated status filter) and present the table
+   as-is -- it's already moderator-readable.
+2. When the moderator is done with the table, run `python3 scripts/inspect_listing.py
+   --stop-server` to tear down the shared server.
+3. If they then want to deep-dive one listing from the table, switch to the
+   single-listing flow below.
+
+**Deep-diving one listing:**
 1. Resolve the `listingId`. If not given, ask, or offer `list_pending()` (via
-   `cli/tools.py`) to let the moderator pick from the review queue.
+   `cli/tools.py`) to let the moderator pick from the review queue -- or point them at
+   `--queue` above if they want to survey rather than pick blind.
 2. Ask (or infer from how they phrased the request) whether the moderator wants images
    inline in the conversation or opened in a browser. Default to inline if unclear --
    it's the lower-friction path and needs no follow-up action from them.

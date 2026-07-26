@@ -20,10 +20,18 @@ host has no way to do that (WSL interop disabled, no X/Wayland display -- verifi
     the interop setting, so a Windows browser can open the printed URL directly. A new
     --serve call stops any server left running from a previous call first.
 
+--queue prints a single markdown table across multiple listings instead of
+inspecting one -- status, decision, confidence, policy rules, and an image link per
+row, backed by one persistent image server rather than restarting one per listing.
+Added after real moderator feedback that the one-listing-at-a-time flow above was too
+much friction with no visibility into decision/confidence (docs/decisions/0015).
+
 Usage:
     python3 scripts/inspect_listing.py LST-100234              # text + local file paths
     python3 scripts/inspect_listing.py LST-100234 --text-only  # text only, no images
     python3 scripts/inspect_listing.py LST-100234 --serve      # text + browser URLs
+    python3 scripts/inspect_listing.py --queue                 # table across all listings
+    python3 scripts/inspect_listing.py --queue --status PENDING_REVIEW
     python3 scripts/inspect_listing.py --stop-server           # tear down a --serve instance
 """
 
@@ -40,10 +48,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import db  # noqa: E402
 from cli.tools import explain_case, get_listing  # noqa: E402
 from images import fetch_image_bytes  # noqa: E402
 
 SERVER_STATE_PATH = Path(tempfile.gettempdir()) / "amm-inspect-server.json"
+ALL_STATUSES = ["PENDING_MODERATION", "PROCESSING", "PENDING_REVIEW", "APPROVED", "REJECTED"]
 
 
 def print_listing_text(listing_id: str) -> None:
@@ -133,6 +143,61 @@ def start_server(directory: str) -> int:
     raise RuntimeError("Image server did not start in time")
 
 
+def print_queue_table(statuses: list[str] | None = None) -> None:
+    """One markdown table covering multiple listings at once -- status, decision,
+    confidence, policy rules, and an image link per listing -- backed by a single
+    persistent image server rather than one server per listing. Addresses moderator
+    feedback that walking listings one at a time (each restarting the server) was too
+    much friction with no visibility into decision/confidence, only images and text."""
+    rows = []
+    for status in statuses or ALL_STATUSES:
+        rows.extend(db.list_listings_by_status(status))
+    rows.sort(key=lambda r: r["created_at"])
+
+    if not rows:
+        print("(no listings match)")
+        return
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="amm-inspect-queue-"))
+    table_rows = []
+    for row in rows:
+        listing_id = row["listing_id"]
+        decision = db.latest_artifact(listing_id, "DecisionAgent")
+        payload = decision["payload"] if decision else None
+
+        image_names = []
+        for i, img in enumerate(row["images"]):
+            content, mime = fetch_image_bytes(img["url"])
+            ext = mime.split("/")[-1] if "/" in mime else "png"
+            fname = f"{listing_id}-{i}.{ext}"
+            (tmp_dir / fname).write_bytes(content)
+            image_names.append(fname)
+
+        table_rows.append(
+            {
+                "listing_id": listing_id,
+                "title": row["title"],
+                "status": row["status"],
+                "decision": payload["decision"] if payload else "-",
+                "confidence": f"{payload['confidence']:.2f}" if payload else "-",
+                "rules": ", ".join(payload["policyRules"]) if payload and payload["policyRules"] else "-",
+                "images": image_names,
+            }
+        )
+
+    port = start_server(str(tmp_dir))
+    print(f"Image server: http://localhost:{port}/\n")
+    print("| Listing | Title | Status | Decision | Confidence | Policy Rules | Images |")
+    print("|---|---|---|---|---|---|---|")
+    for r in table_rows:
+        links = " ".join(f"[{i}](http://localhost:{port}/{name})" for i, name in enumerate(r["images"]))
+        print(
+            f"| {r['listing_id']} | {r['title']} | {r['status']} | {r['decision']} | "
+            f"{r['confidence']} | {r['rules']} | {links or '-'} |"
+        )
+    print("\nRun with --stop-server when done reviewing.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("listing_id", nargs="?")
@@ -140,6 +205,12 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="serve images over HTTP instead of printing file paths")
     parser.add_argument("--stop-server", action="store_true", help="stop a running --serve instance and exit")
     parser.add_argument("--serve-daemon", nargs=2, metavar=("DIR", "STATE_PATH"), help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--queue", action="store_true", help="print a table of multiple listings instead of inspecting one"
+    )
+    parser.add_argument(
+        "--status", help="comma-separated status filter for --queue (default: all statuses)"
+    )
     args = parser.parse_args()
 
     if args.serve_daemon:
@@ -150,8 +221,13 @@ def main() -> None:
         print("Stopped image server." if stop_server() else "No image server was running.")
         return
 
+    if args.queue:
+        statuses = [s.strip().upper() for s in args.status.split(",")] if args.status else None
+        print_queue_table(statuses)
+        return
+
     if not args.listing_id:
-        parser.error("listing_id is required unless --stop-server is given")
+        parser.error("listing_id is required unless --queue or --stop-server is given")
 
     print_listing_text(args.listing_id)
 
