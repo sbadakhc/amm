@@ -35,37 +35,45 @@ ended up different from the original spec.
 
 ## Architecture
 
-```
-Seller → submit listing → Postgres
-                              │
-                     triggers workflow (in-process)
-                              │
-                        Intake Agent
-                              │
-        ┌───────────────┬────┴────┬───────────────┐
-        ▼                ▼        ▼               ▼
-  Evidence Agent  Consistency Agent  Safety Agent    Policy Agent
-        └───────────────┴────┬────┴───────────────┘
-                              ▼
-                        Decision Agent
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-           APPROVE          REVIEW          REJECT
-                              │                │
-                    (REVIEW only) Human Queue → CLI
-                              │                │
-                        ESCALATED ──┐    APPEAL_REQUESTED
-                        (senior     │    (moderator-relayed,
-                         review)    │     no seller-facing
-                              │     │     surface exists, §8.1)
-                              └─────┴──→ APPROVE / REJECT
+```mermaid
+flowchart TD
+    Seller[Seller submits listing] --> DB[(Postgres)]
+    DB -->|PENDING_MODERATION| Poller[service.py poller]
+    Poller --> Intake[Intake Agent]
+
+    Intake --> Evidence[Evidence Agent]
+    Intake --> Consistency[Consistency Agent]
+    Intake --> Safety[Safety Agent]
+    Intake -.->|fans out alongside,<br/>doesn't feed Decision| Embed[Embedding<br/>find_similar_cases only]
+
+    Evidence --> Policy[Policy Agent]
+    Consistency --> Policy
+    Safety --> Policy
+
+    Policy --> Decision[Decision Agent]
+
+    Decision -->|high confidence,<br/>no rules matched| Approved[APPROVED]
+    Decision -->|critical rule,<br/>high confidence| Rejected[REJECTED]
+    Decision -->|otherwise| Review[PENDING_REVIEW]
+
+    Review --> Moderator{Moderator}
+    Moderator -->|approve| Approved
+    Moderator -->|reject| Rejected
+    Moderator -->|escalate| Escalated[ESCALATED]
+
+    Escalated --> Senior{Senior reviewer}
+    Senior -->|approve| Approved
+    Senior -->|reject| Rejected
+
+    Rejected -.->|appeal relayed,<br/>no seller-facing surface, §8.1| Appeal[APPEAL_REQUESTED]
+    Appeal -->|approve| Approved
+    Appeal -->|reject| Rejected
 ```
 
 Single process, async fan-out/fan-in — no broker, no separate API service. The
 escalation and appeal paths (SPEC.md §8) are moderator-only — the automated Decision
 Agent never produces `ESCALATED` or `APPEAL_REQUESTED`, and both resolve back to a
-plain APPROVE/REJECT rather than separate terminal states.
+plain APPROVED/REJECTED rather than separate terminal states.
 
 ## Tech Stack
 
@@ -201,75 +209,130 @@ status (`APPROVED` / `REJECTED` / `PENDING_REVIEW`).
 
 ### 7. Work the review queue
 
-In practice, a moderator does all of this conversationally through Claude Code —
-"show me what's pending," "explain this case," "approve it" — not by writing Python.
-The tool layer (`cli/tools.py`) and the `/inspect-listing` skill are what Claude Code
-calls on the moderator's behalf. See SPEC.md §6/§8 for the full tool table and
-example transcripts; this section is the narrative version.
+Everything below is conversational through Claude Code in practice — "what's
+pending," "show me that case," "approve it." The tool layer (`cli/tools.py`) and the
+`/inspect-listing` skill are what Claude Code calls on your behalf; the commands
+shown here are what actually runs under the hood, for reference. Full tool table and
+transcripts: SPEC.md §6/§8.
 
-**Survey the queue.** `/inspect-listing --queue` (optionally `--status
-PENDING_REVIEW` or another status) prints one table across every listing that
-matches — status, the automated decision, confidence, matched policy rules, and an
-image link — backed by a single image server rather than one per listing:
+#### Routing model: what reaches you, and why
+
+A moderator never sees every listing — most are decided automatically by the
+pipeline. Only three statuses need a human:
+
+| Status | How it got there | What it means for you |
+|---|---|---|
+| `PENDING_REVIEW` | Decision Agent's confidence was too low to auto-approve, or a policy rule matched at non-critical severity | Needs a first-pass human decision |
+| `ESCALATED` | A moderator (possibly you, earlier) flagged a `PENDING_REVIEW` case for a second opinion | Needs a senior/second reviewer's decision |
+| `APPEAL_REQUESTED` | A moderator relayed a dispute against a `REJECTED` listing that reached them through some other channel — this system has no seller-facing portal (§8.1) | Needs an appeal outcome: uphold or overturn |
+
+Everything else — `APPROVED`, `REJECTED` with no appeal, anything still
+`PENDING_MODERATION`/`PROCESSING` — needs nothing from you; the pipeline decided it,
+or a prior decision stands. `APPROVED` listings can never come back to you either —
+appeals only apply to `REJECTED` (§8.2), since there's no real use case for
+contesting an approval.
+
+#### Step 1 — Confirm your identity
+
+`whoami` resolves your `moderatorId` (env var or explicit) against the `moderators`
+registry and confirms you're active before you act on anything:
+
+```
+> whoami
+{"moderator_id": "mod-1", "name": "Alex Moderator", "active": true}
+```
+
+#### Step 2 — Survey what needs you
+
+`/inspect-listing --queue` prints one table across every listing in the three
+statuses above — status, the automated decision, confidence, matched policy rules,
+and an image link per row — backed by a single image server rather than one per
+listing:
 
 ```
 > what's pending?
 
-| Listing     | Title                | Status         | Decision | Confidence | Policy Rules | Images |
-|-------------|-----------------------|-----------------|----------|------------|--------------|--------|
-| LST-4F58A1  | AK-47 ...             | REJECTED        | REJECT   | 1.00       | W001         | [0]    |
-| LST-A79214  | iPhone 16 Pro Max     | PENDING_REVIEW  | REVIEW   | 1.00       | C001         | [0]    |
+| Listing    | Title             | Status          | Decision | Confidence | Policy Rules | Images |
+|------------|-------------------|-----------------|----------|------------|--------------|--------|
+| LST-A79214 | iPhone 16 Pro Max | PENDING_REVIEW  | REVIEW   | 1.00       | C001         | [0]    |
+| LST-C65999 | Sony Headphones   | ESCALATED       | REVIEW   | 0.83       | -            | [0]    |
+| LST-F7BEC4 | AK-47 Rifle       | APPEAL_REQUESTED| REJECT   | 1.00       | W001         | [0]    |
 ```
 
-**Deep-dive one case.** `/inspect-listing <listingId>` prints the listing's full
-text plus every agent artifact (Safety/Evidence/Consistency/Policy/Decision), then
-shows its image(s) one at a time, paced by the moderator — either rendered inline in
-the conversation, or via `--serve`, which pops a real browser tab (works even though
-this dev environment has no way to launch a GUI viewer directly, see
+Filter to one status at a time if you only want one kind of work right now:
+
+```
+/inspect-listing --queue --status PENDING_REVIEW
+/inspect-listing --queue --status ESCALATED
+/inspect-listing --queue --status APPEAL_REQUESTED
+```
+
+#### Step 3 — Pick a case and look closely
+
+`/inspect-listing <listingId>` prints the full listing text, every agent's artifact
+(Safety/Evidence/Consistency/Policy/Decision), and shows its image(s) one at a
+time — inline in the conversation, or via `--serve` for a real browser tab (works
+even though this dev environment has no way to launch a GUI viewer directly, see
 `docs/decisions/0011`).
 
-**Decide.** The routine actions (`from cli import tools`, same layer Claude Code
-calls under the hood):
+#### Step 4 — Cross-check before deciding (optional)
+
+`tools` below is `cli.tools` (`from cli import tools`), the same layer Claude Code
+calls under the hood — you'd never write this Python directly, it's shown for
+reference.
+
+```python
+tools.find_similar_cases(listing_id)   # how were comparable listings handled?
+tools.search_policy("C001")            # what does this rule actually cover?
+```
+
+#### Step 5 — Act, based on which queue the case came from
+
+**From `PENDING_REVIEW`** — decide it:
+
 ```python
 tools.approve_listing(listing_id, "mod-1", "Looks fine on manual review.")
 tools.reject_listing(listing_id, "mod-1", "Counterfeit branding confirmed.")
 ```
-A REJECT here (or an automated one) increments the seller's placeholder violation
-counter (§8.3) — a live count, not the static snapshot taken when the listing was
-first submitted.
 
-**Escalate for a second opinion.** Any `PENDING_REVIEW` case can go to a senior-review
-tier instead of being decided immediately:
+A REJECT increments the seller's violation count (§8.3) — live, not the static
+snapshot taken at submission. If you're unsure, escalate instead of guessing:
+
 ```python
 tools.escalate_case(listing_id, "Ambiguous branding, want a second opinion.")
 ```
-Resolving an escalated case needs no separate tool — `approve_listing`/
-`reject_listing` already transition any listing regardless of current status.
 
-**Handle an appeal.** This system has no seller-facing surface at all (no portal, no
-API) — `request_appeal` is a moderator-invoked tool relaying an appeal that reached a
-human through some other channel, not something a seller triggers directly:
+**From `ESCALATED`** — same two decision tools as above; nothing special is needed
+to resolve an escalation, `approve_listing`/`reject_listing` transition any listing
+regardless of current status.
+
+**From `APPEAL_REQUESTED`** — resolve the appeal, not a plain approve/reject:
+
 ```python
-tools.request_appeal(listing_id, "Seller provided proof of authenticity.")
 tools.resolve_appeal(listing_id, "APPROVE", "Proof accepted, overturning rejection.")
-# or: tools.resolve_appeal(listing_id, "REJECT", "Upheld on review.")
+tools.resolve_appeal(listing_id, "REJECT", "Upheld on review.")
 ```
-Only `REJECTED` listings can be appealed. Resolving reuses `APPROVED`/`REJECTED` as
-the real outcome rather than separate appeal-specific statuses — the artifact log's
-`version` field (`"moderator-appeal-resolution"`) is what marks it as an appeal
-outcome. Denying an appeal does **not** double-count the seller's violation; it was
-already counted when the listing was first rejected.
 
-**Seller account actions.** For a seller with a pattern of violations:
+Denying (`REJECT`) does **not** double-count the seller's violation — it was already
+counted when the listing was first rejected.
+
+#### Step 6 — Repeat
+
+Back to Step 2 until the queue's clear.
+
+#### Step 7 — Seller-level actions (as needed)
+
+Whenever a pattern across listings warrants it, rather than a single case:
+
 ```python
-tools.list_seller_cases(seller_id)                          # every listing from this seller
+tools.list_seller_cases(seller_id)     # everything from this seller
 tools.suspend_seller(seller_id, "Repeated policy violations.")
 tools.reinstate_seller(seller_id, "Investigation cleared them.")
 ```
+
 `sellers` is an explicit placeholder (§8.1, `docs/decisions/0017`) — not assumed to
-be a real customer backend's actual source of truth for seller/account identity, and
-suspending a seller doesn't cascade to their existing listings (each stays
-independently decided).
+be a real customer backend's actual source of truth — and suspending doesn't cascade
+to the seller's existing listings; each stays independently decided.
 
 ### 8. Run the tests
 
