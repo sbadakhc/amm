@@ -7,11 +7,14 @@ import json
 import os
 from datetime import datetime, timezone
 
-# inconsistencyScore above this triggers C004. Configurable (§4), not tuned against
-# real traffic yet — picked from observed scores on the demo's synthetic data. Env
-# var read once at import (same pattern as service.py); run_policy_agent also takes
-# a per-call override for testing/rerunning without reloading the module.
-CONSISTENCY_THRESHOLD = float(os.environ.get("CONSISTENCY_THRESHOLD", "0.30"))
+# inconsistencyScore above this triggers C004. Tuned against real model-call data
+# (docs/decisions/0014): 8 real Consistency Agent runs per demo scenario showed a
+# clean empirical gap between scenarios that should trigger C004 (only
+# "inconsistent", scores 0.505-0.712) and ones that shouldn't (all others,
+# 0.089-0.461) -- 0.48 sits in that gap. Configurable (§4). Env var read once at
+# import (same pattern as service.py); run_policy_agent also takes a per-call
+# override for testing/rerunning without reloading the module.
+CONSISTENCY_THRESHOLD = float(os.environ.get("CONSISTENCY_THRESHOLD", "0.48"))
 
 RULES = {
     "W001": {"description": "Weapons prohibited", "severity": "Critical", "autoReject": False},
