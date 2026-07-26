@@ -56,23 +56,32 @@ workflow trigger, not a status the workflow assigns.
 
 ```
 PENDING_MODERATION → PROCESSING →
-    APPROVED               (terminal)
-    REJECTED                (terminal)
+    APPROVED               (terminal, unless appealed -- see below)
+    REJECTED                (terminal, unless appealed -- see below)
     PENDING_REVIEW →
-        APPROVED (by moderator)   (terminal)
-        REJECTED (by moderator)   (terminal)
+        APPROVED (by moderator)   (terminal, unless appealed)
+        REJECTED (by moderator)   (terminal, unless appealed)
         ESCALATED (by moderator, §8.2/§8.4) →
-            APPROVED (by moderator)   (terminal)
-            REJECTED (by moderator)   (terminal)
+            APPROVED (by moderator)   (terminal, unless appealed)
+            REJECTED (by moderator)   (terminal, unless appealed)
     FAILED (agent error) → PENDING_REVIEW   (never silent-approve on failure)
+
+REJECTED → APPEAL_REQUESTED (by moderator, §8.2/§8.4, relaying an external appeal) →
+    APPROVED (appeal upheld -- overturns the rejection)   (terminal)
+    REJECTED (appeal denied -- original rejection stands)   (terminal)
 ```
 
-`ESCALATED` is moderator-only -- the automated Decision Agent (§3.6/§4) never
-produces it, only APPROVE/REJECT/REVIEW. Resolving an escalated case reuses
-`approve_listing`/`reject_listing` unchanged; they don't check current status before
-transitioning. There is no senior-reviewer role distinction in the `moderators`
-table (§6) -- any active moderator can resolve an `ESCALATED` case, same as a
-`PENDING_REVIEW` one. Noted as a known simplification (§8.4), not solved yet.
+`ESCALATED` and `APPEAL_REQUESTED` are both moderator-only -- the automated Decision
+Agent (§3.6/§4) never produces either, only APPROVE/REJECT/REVIEW. Resolving an
+escalated or appealed case reuses `approve_listing`/`reject_listing`/`resolve_appeal`
+rather than separate terminal states for "approved via escalation" or "approved via
+appeal" -- §5's append-only artifact log already distinguishes these via each
+artifact's `version` field, no new status vocabulary needed. Only `REJECTED`
+listings can be appealed, not `APPROVED` ones -- there's no real use case for
+contesting an approval. There is no senior-reviewer role distinction in the
+`moderators` table (§6) -- any active moderator can resolve an `ESCALATED` or
+`APPEAL_REQUESTED` case, same as a `PENDING_REVIEW` one. Noted as a known
+simplification (§8.4), not solved yet.
 
 ### 2.1 Claiming Listings (Locking Model)
 
@@ -514,6 +523,8 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 | `approve_listing(listingId, moderatorId?, note?)` | — | updated status |
 | `reject_listing(listingId, moderatorId?, reason)` | — | updated status |
 | `escalate_case(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, PENDING_REVIEW only) |
+| `request_appeal(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, REJECTED only) |
+| `resolve_appeal(listingId, decision, reason, moderatorId?)` | `{ decision: APPROVE\|REJECT }` | updated status (§8.2/§8.4, APPEAL_REQUESTED only) |
 | `search_policy(query)` | `{ query }` | matching rule(s) |
 | `find_similar_cases(listingId, k?)` | — | `Case[]` |
 | `show_images(listingId)` | — | image URLs |
@@ -601,9 +612,10 @@ embedding and `find_similar_cases` raises rather than silently returning nothing
 **Status: in progress, built incrementally.** Captured as scoping ahead of
 implementation (`docs/decisions/0017`) so the intended direction was documented
 before it was built, not reverse-engineered from a diff later. §8.3's `sellers`
-table/violation counter and §8.2's `ESCALATED` state/`escalate_case` tool are now
-implemented; appeal states and the rest of §8.4's tools are not yet -- each piece
-lands as its own PR, in dependency order.
+table/violation counter, §8.2's `ESCALATED` state/`escalate_case` tool, and §8.2's
+appeal flow (`APPEAL_REQUESTED`, `request_appeal`/`resolve_appeal`) are now
+implemented; account-action tools (§8.4) are not yet -- each piece lands as its own
+PR, in dependency order.
 
 ### 8.1 Why this is split from the rest of the spec
 
@@ -622,27 +634,34 @@ the real integration contract is known. The plan instead:
   means writing a sync/adapter layer and migrating this placeholder, not rewriting the
   escalation/appeal logic itself.
 
-### 8.2 Listing state machine extension -- ESCALATED implemented, appeal states not yet
+### 8.2 Listing state machine extension -- implemented
 
 Extends §2's state machine -- terminal states gain defined transitions back out
 rather than staying permanently terminal:
 
 ```
 PENDING_REVIEW →
-    ESCALATED (senior-review tier, for high-stakes/repeat-offender cases)  [IMPLEMENTED]
+    ESCALATED (senior-review tier, for high-stakes/repeat-offender cases)
         → APPROVED | REJECTED (by senior reviewer)
 
-APPROVED / REJECTED (currently terminal, §2) →
-    APPEAL_REQUESTED (seller- or moderator-initiated)  [NOT YET IMPLEMENTED]
-        → APPEAL_APPROVED (reverses the original decision, new terminal state)
-        → APPEAL_DENIED (original decision stands, new terminal state)
+REJECTED →
+    APPEAL_REQUESTED (moderator-invoked, relaying an appeal that reached a human
+                       through some other channel -- this system has no seller-
+                       facing surface at all, see §8.1)
+        → APPROVED (appeal upheld -- overturns the rejection)
+        → REJECTED (appeal denied -- original rejection stands)
 ```
 
 `ESCALATED` addresses the gap between today's binary REVIEW/REJECT split and the
 industry-standard tiered pattern (auto → confidence-routed human → senior human
-review, per `docs/decisions/0017`) -- now real, see §2 and §8.4. Appeal states give
-REJECTED/APPROVED a defined way back into the review process instead of being
-permanently final -- still scoping only.
+review, per `docs/decisions/0017`). Appeal handling reuses `APPROVED`/`REJECTED` as
+the actual outcome status rather than separate `APPEAL_APPROVED`/`APPEAL_DENIED`
+terminal states -- nothing needs a listing in any status but those two to determine
+liveness, and §5's artifact log already distinguishes an appeal resolution via its
+`version` field (`"moderator-appeal-resolution"`), without a new status vocabulary.
+Only `REJECTED` can be appealed, not `APPROVED` -- no real use case for contesting an
+approval. Both narrowed from the original scoping sketch, confirmed with the human
+before implementing (`docs/decisions/0017`).
 
 ### 8.3 Seller-account model (placeholder, see 8.1) -- table + counter implemented
 
@@ -677,16 +696,16 @@ Extends §6's tool table:
 | Tool | Purpose | Status |
 |---|---|---|
 | `escalate_case(listingId, reason, moderatorId?)` | Moves a `PENDING_REVIEW` case to `ESCALATED` for senior-reviewer attention | **Implemented** -- also in §6 |
-| `request_appeal(listingId, reason)` | Reopens a terminal (APPROVED/REJECTED) listing into `APPEAL_REQUESTED` | Not yet implemented |
-| `resolve_appeal(listingId, decision, reason)` | Senior moderator closes an appeal -- reverses or upholds the original decision | Not yet implemented |
+| `request_appeal(listingId, reason, moderatorId?)` | Moves a `REJECTED` listing to `APPEAL_REQUESTED` | **Implemented** -- also in §6 |
+| `resolve_appeal(listingId, decision, reason, moderatorId?)` | Closes an appeal -- `APPROVE` overturns, `REJECT` upholds (no double-counted violation on uphold) | **Implemented** -- also in §6 |
 | `list_seller_cases(sellerId)` | Every listing tied to one seller -- not possible today without an ad hoc scan | Not yet implemented |
 | `suspend_seller(sellerId, reason)` / `reinstate_seller(sellerId)` | Account-level actions against the placeholder `sellers` table (§8.3) | Not yet implemented |
 
 Resolving an `ESCALATED` case needed no new tool -- `approve_listing`/`reject_listing`
 already transition any listing regardless of current status, verified against real
 Postgres. There is no senior-reviewer role distinction in the `moderators` table --
-any active moderator can resolve an escalated case today, a known simplification, not
-solved here.
+any active moderator can resolve an escalated or appealed case today, a known
+simplification, not solved here.
 
 ### 8.5 Also noted, not yet addressed here
 

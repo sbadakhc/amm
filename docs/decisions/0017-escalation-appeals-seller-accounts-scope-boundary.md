@@ -99,3 +99,35 @@ the escalation). Also confirmed: re-escalating an already-`ESCALATED` listing is
 rejected rather than silently re-escalated. As flagged when this was scoped, there is
 still no senior-reviewer role distinction in the `moderators` table -- any active
 moderator can resolve an escalated case, same as a `PENDING_REVIEW` one.
+
+## Update: third piece implemented (appeal flow), narrowed twice before building
+
+`APPEAL_REQUESTED` (§2/§8.2) and `cli.tools.request_appeal`/`resolve_appeal` (§8.4)
+landed third. Discussed and narrowed twice with the human before implementing, both
+times per this ADR's "don't build what we won't use" principle already in play for
+the sellers-table scoping:
+
+1. **No `initiatedBy: seller | moderator` field.** This system has no seller-facing
+   surface at all (SPEC.md: "no web UI"). In a real system appeals originate from
+   the seller, but here `request_appeal` is a plain moderator-invoked tool relaying
+   whatever reached a human through some other channel (the marketplace app,
+   support, etc.) -- there's no seller identity/auth in this system to back a real
+   `initiatedBy` distinction with, so it wasn't added.
+2. **Reused `APPROVED`/`REJECTED` as the appeal's actual outcome**, not this ADR's
+   originally-scoped separate `APPEAL_APPROVED`/`APPEAL_DENIED` terminal states --
+   nothing needs a listing in any status but those two to determine liveness, and
+   §5's append-only artifact log already distinguishes an appeal resolution via its
+   `version` field (`"moderator-appeal-resolution"`) without new status vocabulary.
+
+Two more decisions made and stated plainly rather than silently assumed: only
+`REJECTED` listings can be appealed, not `APPROVED` (no real use case for contesting
+an approval); and denying an appeal must not increment the seller's violation count
+a second time (`record_decision` gained a `count_violation` parameter for this,
+defaulting to the existing behavior everywhere except `resolve_appeal`'s denial
+path).
+
+Verified against real Postgres, all four scenarios: appeal denied (REJECTED →
+APPEAL_REQUESTED → REJECTED, violation count stayed at 1, not double-counted);
+appeal approved (REJECTED → APPEAL_REQUESTED → APPROVED, overturning); guard against
+appealing an `APPROVED` listing; guard against resolving a non-`APPEAL_REQUESTED`
+listing; guard against an invalid `resolve_appeal` decision value.

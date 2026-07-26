@@ -91,8 +91,9 @@ they've picked a specific case from the table.
 7. If the moderator wants only the text (no images), run the script with
    `--text-only` instead of fetching images at all.
 8. This skill only displays information -- it never calls `approve_listing`,
-   `reject_listing`, `escalate_case`, or `record_decision` itself. Those stay
-   explicit moderator actions via the normal CLI tools.
+   `reject_listing`, `escalate_case`, `request_appeal`, `resolve_appeal`, or
+   `record_decision` itself. Those stay explicit moderator actions via the normal
+   CLI tools.
 
 ## Notes
 

@@ -246,3 +246,57 @@ def test_escalate_case_does_not_touch_seller_violation_count(seeded_listing_with
 
     seller = db.get_seller(seller_id)
     assert seller is None or seller["violation_count"] == 0
+
+
+def test_request_appeal_moves_rejected_to_appeal_requested(seeded_listing_with_own_seller, active_moderator):
+    listing_id, _ = seeded_listing_with_own_seller
+    tools.reject_listing(listing_id, active_moderator, "Counterfeit.")
+
+    result = tools.request_appeal(listing_id, "Seller disputes classification.", active_moderator)
+
+    assert result["status"] == "APPEAL_REQUESTED"
+
+
+def test_request_appeal_rejects_non_rejected_listing(seeded_listing, active_moderator):
+    tools.approve_listing(seeded_listing, active_moderator, "Looks fine.")
+
+    with pytest.raises(ValueError, match="Can only appeal a REJECTED listing"):
+        tools.request_appeal(seeded_listing, "nonsense", active_moderator)
+
+
+def test_resolve_appeal_denied_upholds_rejection_without_double_counting(
+    seeded_listing_with_own_seller, active_moderator
+):
+    listing_id, seller_id = seeded_listing_with_own_seller
+    tools.reject_listing(listing_id, active_moderator, "Counterfeit.")
+    assert db.get_seller(seller_id)["violation_count"] == 1
+
+    tools.request_appeal(listing_id, "Seller disputes classification.", active_moderator)
+    result = tools.resolve_appeal(listing_id, "REJECT", "Upheld on review.", active_moderator)
+
+    assert result["status"] == "REJECTED"
+    assert db.get_seller(seller_id)["violation_count"] == 1  # not double-counted
+
+
+def test_resolve_appeal_approved_overturns_rejection(seeded_listing, active_moderator):
+    tools.reject_listing(seeded_listing, active_moderator, "Counterfeit.")
+    tools.request_appeal(seeded_listing, "Seller provided proof of authenticity.", active_moderator)
+
+    result = tools.resolve_appeal(seeded_listing, "APPROVE", "Proof accepted, overturning.", active_moderator)
+
+    assert result["status"] == "APPROVED"
+
+
+def test_resolve_appeal_rejects_non_appeal_requested_listing(seeded_listing, active_moderator):
+    tools.approve_listing(seeded_listing, active_moderator, "Looks fine.")
+
+    with pytest.raises(ValueError, match="Can only resolve an APPEAL_REQUESTED listing"):
+        tools.resolve_appeal(seeded_listing, "APPROVE", "nonsense", active_moderator)
+
+
+def test_resolve_appeal_rejects_invalid_decision(seeded_listing, active_moderator):
+    tools.reject_listing(seeded_listing, active_moderator, "Counterfeit.")
+    tools.request_appeal(seeded_listing, "Dispute.", active_moderator)
+
+    with pytest.raises(ValueError, match="decision must be APPROVE or REJECT"):
+        tools.resolve_appeal(seeded_listing, "ESCALATE", "nonsense", active_moderator)

@@ -99,12 +99,25 @@ def whoami(moderator_id: str | None = None) -> dict:
     return db.get_moderator(moderator_id)
 
 
-def record_decision(listing_id: str, decision: str, reason: str, moderator_id: str | None = None) -> dict:
+def record_decision(
+    listing_id: str,
+    decision: str,
+    reason: str,
+    moderator_id: str | None = None,
+    version: str = "moderator-override",
+    count_violation: bool = True,
+) -> dict:
     """`record_decision(listingId, decision, reason)` (§6) — appends a new DecisionAgent
     artifact (moderator override, §5) rather than editing the automated one, and moves
-    the listing to the matching terminal status. A REJECT override also increments
-    the seller's placeholder violation count (§8.3, docs/decisions/0017), same as the
-    automated path in `pipeline.process_listing`."""
+    the listing to the matching status. A REJECT decision also increments the
+    seller's placeholder violation count (§8.3, docs/decisions/0017), same as the
+    automated path in `pipeline.process_listing` -- unless `count_violation=False`,
+    used by `resolve_appeal` when denying an appeal: the violation was already
+    counted when the listing was first rejected, so upholding it on appeal isn't a
+    *new* violation. `version` lets callers mark what produced this artifact --
+    `resolve_appeal` uses `"moderator-appeal-resolution"` instead of the default, so
+    an appeal outcome is distinguishable from a plain override in the artifact log
+    without a separate terminal-state vocabulary (§8.2)."""
     if decision not in DECISION_TO_STATUS:
         raise ValueError(f"decision must be one of {list(DECISION_TO_STATUS)}, got {decision!r}")
 
@@ -113,7 +126,7 @@ def record_decision(listing_id: str, decision: str, reason: str, moderator_id: s
     artifact = {
         "listingId": listing_id,
         "agent": "DecisionAgent",
-        "version": "moderator-override",
+        "version": version,
         "producedAt": datetime.now(timezone.utc).isoformat(),
         "payload": {
             "decision": decision,
@@ -126,7 +139,7 @@ def record_decision(listing_id: str, decision: str, reason: str, moderator_id: s
     }
     inserted = db.insert_artifact(artifact)
     db.update_listing_status(listing_id, DECISION_TO_STATUS[decision])
-    if decision == "REJECT":
+    if decision == "REJECT" and count_violation:
         row = db.get_listing_row(listing_id)
         seller_id = row["seller"]["sellerId"]
         db.upsert_seller_if_missing(seller_id, row["seller"].get("previousViolations", 0))
@@ -169,6 +182,48 @@ def escalate_case(listing_id: str, reason: str, moderator_id: str | None = None)
     if row["status"] != "PENDING_REVIEW":
         raise ValueError(f"Can only escalate a PENDING_REVIEW listing, got status {row['status']!r}")
     record_decision(listing_id, "ESCALATE", reason, moderator_id)
+    return db.get_listing_row(listing_id)
+
+
+def request_appeal(listing_id: str, reason: str, moderator_id: str | None = None) -> dict:
+    """`request_appeal(listingId, reason, moderatorId?)` (§8.4) -- moves a REJECTED
+    listing to APPEAL_REQUESTED. Moderator-invoked only: this system has no
+    seller-facing surface at all (SPEC.md is explicit -- conversational CLI, no web
+    UI), so there's no `initiatedBy: seller | moderator` distinction to model here.
+    This tool relays an appeal that reached a human through some other channel (the
+    marketplace app, support, etc.), not something a seller triggers directly.
+
+    Only valid from REJECTED, not APPROVED -- there's no real use case for
+    contesting an approval, appeals exist to contest adverse decisions."""
+    row = db.get_listing_row(listing_id)
+    if row is None:
+        raise ValueError(f"No such listing: {listing_id}")
+    if row["status"] != "REJECTED":
+        raise ValueError(f"Can only appeal a REJECTED listing, got status {row['status']!r}")
+    record_decision(listing_id, "REQUEST_APPEAL", reason, moderator_id)
+    return db.get_listing_row(listing_id)
+
+
+def resolve_appeal(listing_id: str, decision: str, reason: str, moderator_id: str | None = None) -> dict:
+    """`resolve_appeal(listingId, decision, reason, moderatorId?)` (§8.4) -- closes an
+    APPEAL_REQUESTED case, `decision` one of APPROVE (overturns the original
+    rejection) or REJECT (upholds it). Reuses APPROVED/REJECTED as the listing's
+    actual final status rather than separate APPEAL_APPROVED/APPEAL_DENIED states
+    (§8.2) -- the artifact's `version` marks it as an appeal resolution instead.
+
+    Denying (REJECT) does not increment the seller's violation count again -- it was
+    already counted when the listing was first rejected; upholding it on appeal
+    isn't a *new* violation."""
+    if decision not in ("APPROVE", "REJECT"):
+        raise ValueError(f"decision must be APPROVE or REJECT, got {decision!r}")
+    row = db.get_listing_row(listing_id)
+    if row is None:
+        raise ValueError(f"No such listing: {listing_id}")
+    if row["status"] != "APPEAL_REQUESTED":
+        raise ValueError(f"Can only resolve an APPEAL_REQUESTED listing, got status {row['status']!r}")
+    record_decision(
+        listing_id, decision, reason, moderator_id, version="moderator-appeal-resolution", count_violation=False
+    )
     return db.get_listing_row(listing_id)
 
 
