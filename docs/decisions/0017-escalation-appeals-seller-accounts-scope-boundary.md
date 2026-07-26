@@ -74,3 +74,14 @@ Split what gets built now from what's deferred, along a logic/storage boundary:
   tiers/appeal states/seller entities exist (e.g. `--queue` gaining an escalation-tier
   or appeal-status column, a seller-level view) -- flagged in the skill's Notes
   section now as a forward reference, not built yet.
+
+## Update: first piece implemented
+
+The placeholder `sellers` table and live `violation_count` counter (§8.3) landed as
+the first PR, confirmed with the human to build one dependency-ordered piece at a
+time (sellers table → escalation → appeals → account-action tools). Verified against
+real Postgres: `violation_count` increments correctly on both the automated
+Decision-Agent REJECT path and a moderator's `reject_listing` override, and is left
+untouched by APPROVE. Decision Agent's confidence fusion still reads only the static
+`sellerPreviousViolations` snapshot, per this ADR's decision to keep that a separate,
+later change rather than bundling it into the additive foundation piece.

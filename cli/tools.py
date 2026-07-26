@@ -102,7 +102,9 @@ def whoami(moderator_id: str | None = None) -> dict:
 def record_decision(listing_id: str, decision: str, reason: str, moderator_id: str | None = None) -> dict:
     """`record_decision(listingId, decision, reason)` (§6) — appends a new DecisionAgent
     artifact (moderator override, §5) rather than editing the automated one, and moves
-    the listing to the matching terminal status."""
+    the listing to the matching terminal status. A REJECT override also increments
+    the seller's placeholder violation count (§8.3, docs/decisions/0017), same as the
+    automated path in `pipeline.process_listing`."""
     if decision not in DECISION_TO_STATUS:
         raise ValueError(f"decision must be one of {list(DECISION_TO_STATUS)}, got {decision!r}")
 
@@ -124,6 +126,11 @@ def record_decision(listing_id: str, decision: str, reason: str, moderator_id: s
     }
     inserted = db.insert_artifact(artifact)
     db.update_listing_status(listing_id, DECISION_TO_STATUS[decision])
+    if decision == "REJECT":
+        row = db.get_listing_row(listing_id)
+        seller_id = row["seller"]["sellerId"]
+        db.upsert_seller_if_missing(seller_id, row["seller"].get("previousViolations", 0))
+        db.increment_seller_violations(seller_id)
     return inserted
 
 

@@ -585,12 +585,14 @@ embedding and `find_similar_cases` raises rather than silently returning nothing
 
 ---
 
-## 8. Planned: Escalation, Appeals, and Seller Accounts (not yet implemented)
+## 8. Escalation, Appeals, and Seller Accounts
 
-**Status: scoping only.** Nothing in this section exists in code yet -- captured here
-ahead of implementation so the intended direction is documented before it's built, not
-reverse-engineered from a diff later. See `docs/decisions/0017` for the full context,
-cited research, and the reasoning below.
+**Status: in progress, built incrementally.** Captured as scoping ahead of
+implementation (`docs/decisions/0017`) so the intended direction was documented
+before it was built, not reverse-engineered from a diff later. §8.3's `sellers`
+table and violation counter are now implemented; escalation states, appeal states,
+and the rest of §8.4's tools are not yet -- each piece lands as its own PR, in
+dependency order.
 
 ### 8.1 Why this is split from the rest of the spec
 
@@ -630,18 +632,31 @@ industry-standard tiered pattern (auto → confidence-routed human → senior hu
 review, per `docs/decisions/0017`). Appeal states give REJECTED/APPROVED a defined
 way back into the review process instead of being permanently final.
 
-### 8.3 Planned seller-account model (placeholder, see 8.1)
+### 8.3 Seller-account model (placeholder, see 8.1) -- table + counter implemented
 
 A `sellers` table, keyed loosely to the existing embedded `seller.sellerId` JSONB
-field on `listings` (§3.1) rather than replacing it outright:
+field on `listings` (§3.1) rather than replacing it outright: `seller_id`, `status`
+(`ACTIVE` / `SUSPENDED` / `TERMINATED`, all listings created `ACTIVE` -- no code path
+changes it yet, §8.4 below), `violation_count` (a live counter -- unlike
+`sellerPreviousViolations`, which stays a static snapshot copied onto each listing at
+submission time). Implemented in `schema.sql`/`db.py`:
 
-- `seller_id`, `status` (`ACTIVE` / `SUSPENDED` / `TERMINATED`), `violation_count`
-  (a live counter, incremented on REJECT/APPEAL_DENIED -- unlike today's
-  `sellerPreviousViolations`, which is a static snapshot copied onto each listing at
-  submission time and never updated by pipeline outcomes).
-- Account-level status changes progressively (warning → listing suppression →
-  suspension → termination, per `docs/decisions/0017`'s cited pattern), not a single
-  binary suspend/not-suspended flag.
+- `db.upsert_seller_if_missing(seller_id, initial_violation_count)` -- called from
+  `pipeline.process_listing` for every listing processed, seeded from that listing's
+  `seller.previousViolations`. A no-op if the seller already has a row, so it never
+  resets `violation_count` on a repeat listing from the same seller.
+- `db.increment_seller_violations(seller_id)` -- called on REJECT, both the automated
+  path (`pipeline.process_listing`) and a moderator's override
+  (`cli.tools.record_decision`). Verified against a real Postgres instance: an
+  automated W001 auto-reject incremented a fresh seller's count 0 → 1; a moderator
+  `reject_listing` call on a different listing did the same; an `approve_listing`
+  call left the count untouched.
+- **Not yet done**: Decision Agent's confidence fusion (§4) still reads only the
+  static `sellerPreviousViolations` snapshot, not this live counter -- deliberately
+  deferred to a separate change (§8.1's why: this PR is additive-only, doesn't touch
+  existing decision-making behavior). Account-level progressive status changes
+  (warning → suppression → suspension → termination) and the escalation/appeal tools
+  in §8.4 are not yet implemented either.
 
 ### 8.4 Planned CLI tools (not yet implemented)
 

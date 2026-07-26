@@ -68,3 +68,19 @@ CREATE TABLE IF NOT EXISTS listing_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_listing_embeddings_hnsw
     ON listing_embeddings USING hnsw (embedding halfvec_cosine_ops);
+
+-- Placeholder seller entity (§8.3, docs/decisions/0017) -- NOT assumed to be the
+-- real source of truth for seller/account identity; a stand-in until this project's
+-- eventual integration with a real customer backend (if any) is known. `violation_count`
+-- is a live counter incremented on REJECT (pipeline.process_listing, cli.tools
+-- record_decision), unlike `listings.seller->>'previousViolations'`, which stays a
+-- static snapshot taken at listing submission time and is not touched by this table.
+-- Not yet read by Decision Agent's confidence fusion (§4) -- that remains a
+-- separate, later change.
+CREATE TABLE IF NOT EXISTS sellers (
+    seller_id       TEXT PRIMARY KEY,
+    status          TEXT NOT NULL DEFAULT 'ACTIVE',
+    violation_count INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);

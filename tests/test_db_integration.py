@@ -211,3 +211,42 @@ def test_upsert_listing_embedding_overwrites(three_embedded_listings):
     results = db.find_similar_by_embedding(listing_a, k=5)
     assert results[0]["listing_id"] == listing_c
     assert results[0]["distance"] == 0.0
+
+
+@pytest.fixture
+def seller_id():
+    """§8.3, docs/decisions/0017 -- placeholder sellers table."""
+    sid = f"SUP-TEST-{uuid.uuid4().hex[:6].upper()}"
+    yield sid
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sellers WHERE seller_id = %s", (sid,))
+        conn.commit()
+
+
+def test_upsert_seller_if_missing_creates_row(seller_id):
+    db.upsert_seller_if_missing(seller_id, initial_violation_count=2)
+
+    seller = db.get_seller(seller_id)
+    assert seller["status"] == "ACTIVE"
+    assert seller["violation_count"] == 2
+
+
+def test_upsert_seller_if_missing_does_not_reset_existing_row(seller_id):
+    db.upsert_seller_if_missing(seller_id, initial_violation_count=0)
+    db.increment_seller_violations(seller_id)
+    db.upsert_seller_if_missing(seller_id, initial_violation_count=0)  # e.g. a second listing from the same seller
+
+    assert db.get_seller(seller_id)["violation_count"] == 1
+
+
+def test_increment_seller_violations_accumulates(seller_id):
+    db.upsert_seller_if_missing(seller_id)
+    db.increment_seller_violations(seller_id)
+    db.increment_seller_violations(seller_id)
+
+    assert db.get_seller(seller_id)["violation_count"] == 2
+
+
+def test_get_seller_unknown_returns_none():
+    assert db.get_seller("SUP-DOES-NOT-EXIST") is None

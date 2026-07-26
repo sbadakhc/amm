@@ -66,12 +66,20 @@ def run_fusion(canonical_doc: dict) -> dict:
 
 
 def process_listing(row: dict) -> None:
-    """End-to-end processing of one claimed (PROCESSING) listing row (§7)."""
+    """End-to-end processing of one claimed (PROCESSING) listing row (§7). Also
+    upserts a placeholder `sellers` row and increments its violation count on REJECT
+    (§8.3, docs/decisions/0017) -- not yet read by Decision Agent's confidence fusion,
+    that's a separate, later change."""
     listing_id = row["listing_id"]
+    seller_id = row["seller"]["sellerId"]
+    db.upsert_seller_if_missing(seller_id, row["seller"].get("previousViolations", 0))
     try:
         canonical_doc = to_canonical_document(row)
         decision = run_fusion(canonical_doc)
-        db.update_listing_status(listing_id, DECISION_TO_STATUS[decision["payload"]["decision"]])
+        status = DECISION_TO_STATUS[decision["payload"]["decision"]]
+        db.update_listing_status(listing_id, status)
+        if status == "REJECTED":
+            db.increment_seller_violations(seller_id)
     except Exception as e:  # noqa: BLE001 - any agent failure routes to review, never silent-approve
         _record_failure(listing_id, "pipeline", e)
 
