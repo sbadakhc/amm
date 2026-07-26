@@ -525,6 +525,9 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 | `escalate_case(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, PENDING_REVIEW only) |
 | `request_appeal(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, REJECTED only) |
 | `resolve_appeal(listingId, decision, reason, moderatorId?)` | `{ decision: APPROVE\|REJECT }` | updated status (§8.2/§8.4, APPEAL_REQUESTED only) |
+| `list_seller_cases(sellerId)` | — | `Listing[]` (§8.4) |
+| `suspend_seller(sellerId, reason, moderatorId?)` | — | updated seller status (§8.4, ACTIVE only) |
+| `reinstate_seller(sellerId, reason, moderatorId?)` | — | updated seller status (§8.4, SUSPENDED only) |
 | `search_policy(query)` | `{ query }` | matching rule(s) |
 | `find_similar_cases(listingId, k?)` | — | `Case[]` |
 | `show_images(listingId)` | — | image URLs |
@@ -609,13 +612,13 @@ embedding and `find_similar_cases` raises rather than silently returning nothing
 
 ## 8. Escalation, Appeals, and Seller Accounts
 
-**Status: in progress, built incrementally.** Captured as scoping ahead of
-implementation (`docs/decisions/0017`) so the intended direction was documented
-before it was built, not reverse-engineered from a diff later. §8.3's `sellers`
-table/violation counter, §8.2's `ESCALATED` state/`escalate_case` tool, and §8.2's
-appeal flow (`APPEAL_REQUESTED`, `request_appeal`/`resolve_appeal`) are now
-implemented; account-action tools (§8.4) are not yet -- each piece lands as its own
-PR, in dependency order.
+**Status: fully implemented.** Captured as scoping ahead of implementation
+(`docs/decisions/0017`) so the intended direction was documented before it was built,
+not reverse-engineered from a diff later. Built incrementally, one dependency-ordered
+piece per PR: §8.3's `sellers` table/violation counter, §8.2's `ESCALATED`
+state/`escalate_case` tool, §8.2's appeal flow (`APPEAL_REQUESTED`,
+`request_appeal`/`resolve_appeal`), and §8.4's account-action tools
+(`list_seller_cases`, `suspend_seller`, `reinstate_seller`) are all now implemented.
 
 ### 8.1 Why this is split from the rest of the spec
 
@@ -689,7 +692,7 @@ submission time). Implemented in `schema.sql`/`db.py`:
   (warning → suppression → suspension → termination) and the escalation/appeal tools
   in §8.4 are not yet implemented either.
 
-### 8.4 CLI tools: planned and implemented
+### 8.4 CLI tools -- all implemented
 
 Extends §6's tool table:
 
@@ -698,14 +701,19 @@ Extends §6's tool table:
 | `escalate_case(listingId, reason, moderatorId?)` | Moves a `PENDING_REVIEW` case to `ESCALATED` for senior-reviewer attention | **Implemented** -- also in §6 |
 | `request_appeal(listingId, reason, moderatorId?)` | Moves a `REJECTED` listing to `APPEAL_REQUESTED` | **Implemented** -- also in §6 |
 | `resolve_appeal(listingId, decision, reason, moderatorId?)` | Closes an appeal -- `APPROVE` overturns, `REJECT` upholds (no double-counted violation on uphold) | **Implemented** -- also in §6 |
-| `list_seller_cases(sellerId)` | Every listing tied to one seller -- not possible today without an ad hoc scan | Not yet implemented |
-| `suspend_seller(sellerId, reason)` / `reinstate_seller(sellerId)` | Account-level actions against the placeholder `sellers` table (§8.3) | Not yet implemented |
+| `list_seller_cases(sellerId)` | Every listing tied to one seller | **Implemented** -- also in §6 |
+| `suspend_seller(sellerId, reason, moderatorId?)` | Moves a seller from `ACTIVE` to `SUSPENDED`, against the placeholder `sellers` table (§8.3) | **Implemented** -- also in §6 |
+| `reinstate_seller(sellerId, reason, moderatorId?)` | Moves a seller from `SUSPENDED` back to `ACTIVE` | **Implemented** -- also in §6 |
 
 Resolving an `ESCALATED` case needed no new tool -- `approve_listing`/`reject_listing`
 already transition any listing regardless of current status, verified against real
 Postgres. There is no senior-reviewer role distinction in the `moderators` table --
 any active moderator can resolve an escalated or appealed case today, a known
-simplification, not solved here.
+simplification, not solved here. `suspend_seller`/`reinstate_seller` don't cascade to
+the seller's existing listings (e.g. auto-rejecting pending ones on suspension) --
+also a known simplification, each listing is still decided independently via the
+normal tools. There is no `terminate_seller` tool -- `TERMINATED` is a valid schema
+status (§8.3) that nothing currently produces, not scoped/requested.
 
 ### 8.5 Also noted, not yet addressed here
 
