@@ -85,3 +85,17 @@ Decision-Agent REJECT path and a moderator's `reject_listing` override, and is l
 untouched by APPROVE. Decision Agent's confidence fusion still reads only the static
 `sellerPreviousViolations` snapshot, per this ADR's decision to keep that a separate,
 later change rather than bundling it into the additive foundation piece.
+
+## Update: second piece implemented (escalation tier)
+
+`ESCALATED` (§2/§8.2) and `cli.tools.escalate_case` (§8.4) landed second, per the
+agreed sequencing. `pipeline.DECISION_TO_STATUS` gained `"ESCALATE": "ESCALATED"` --
+moderator-only, the automated Decision Agent's `_route` (§4) never produces it.
+Resolving an escalated case needed no new code: `approve_listing`/`reject_listing`
+already transition any listing regardless of current status, confirmed against real
+Postgres (escalate a PENDING_REVIEW case → ESCALATED, then `reject_listing` on it →
+REJECTED, with the seller's violation count incrementing once, from the reject, not
+the escalation). Also confirmed: re-escalating an already-`ESCALATED` listing is
+rejected rather than silently re-escalated. As flagged when this was scoped, there is
+still no senior-reviewer role distinction in the `moderators` table -- any active
+moderator can resolve an escalated case, same as a `PENDING_REVIEW` one.

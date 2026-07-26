@@ -152,6 +152,26 @@ def reject_listing(listing_id: str, moderator_id: str | None = None, reason: str
     return db.get_listing_row(listing_id)
 
 
+def escalate_case(listing_id: str, reason: str, moderator_id: str | None = None) -> dict:
+    """`escalate_case(listingId, reason, moderatorId?)` (§8.4) -- moves a
+    PENDING_REVIEW case to ESCALATED for senior-reviewer attention. Only valid from
+    PENDING_REVIEW (§8.2's state machine extension); escalating an already-terminal
+    or already-escalated listing is rejected rather than silently re-escalated.
+
+    Resolving an escalated case reuses approve_listing/reject_listing unchanged --
+    they don't check current status before transitioning. There is no senior-reviewer
+    role distinction in the moderators table yet (§8.4) -- any active moderator can
+    resolve an ESCALATED case, same as a PENDING_REVIEW one. Noted as a known
+    simplification, not solved here."""
+    row = db.get_listing_row(listing_id)
+    if row is None:
+        raise ValueError(f"No such listing: {listing_id}")
+    if row["status"] != "PENDING_REVIEW":
+        raise ValueError(f"Can only escalate a PENDING_REVIEW listing, got status {row['status']!r}")
+    record_decision(listing_id, "ESCALATE", reason, moderator_id)
+    return db.get_listing_row(listing_id)
+
+
 def rerun_analysis(listing_id: str, agent: str | None = None) -> dict:
     """`rerun_analysis(listingId, agent?)` (§6). Appends new artifact(s) rather than
     overwriting (§5) — safe to call on a terminal listing, e.g. after a model upgrade.

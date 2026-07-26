@@ -16,7 +16,14 @@ from embeddings import MODEL as EMBEDDING_MODEL
 from embeddings import embed_text
 from intake import to_canonical_document
 
-DECISION_TO_STATUS = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "REVIEW": "PENDING_REVIEW"}
+DECISION_TO_STATUS = {
+    "APPROVE": "APPROVED",
+    "REJECT": "REJECTED",
+    "REVIEW": "PENDING_REVIEW",
+    # Moderator-only (cli.tools.escalate_case, §8.2/§8.4) -- the automated Decision
+    # Agent's _route (§4) never emits this, only APPROVE/REJECT/REVIEW.
+    "ESCALATE": "ESCALATED",
+}
 
 
 def _record_failure(listing_id: str, stage: str, error: Exception) -> None:

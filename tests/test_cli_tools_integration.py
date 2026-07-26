@@ -216,3 +216,33 @@ def test_approve_listing_does_not_touch_seller_violation_count(seeded_listing_wi
 
     seller = db.get_seller(seller_id)
     assert seller is None or seller["violation_count"] == 0
+
+
+def test_escalate_case_moves_pending_review_to_escalated(seeded_listing, active_moderator):
+    result = tools.escalate_case(seeded_listing, "Repeat pattern worth senior review.", active_moderator)
+    assert result["status"] == "ESCALATED"
+
+
+def test_escalate_case_rejects_non_pending_review_listing(seeded_listing, active_moderator):
+    tools.approve_listing(seeded_listing, active_moderator, "Looks fine.")
+
+    with pytest.raises(ValueError, match="Can only escalate a PENDING_REVIEW listing"):
+        tools.escalate_case(seeded_listing, "too late", active_moderator)
+
+
+def test_escalated_case_resolves_via_existing_approve_reject_tools(seeded_listing, active_moderator):
+    """Resolving an ESCALATED case needs no new code -- approve_listing/reject_listing
+    already transition any listing regardless of current status (§8.2)."""
+    tools.escalate_case(seeded_listing, "Needs senior review.", active_moderator)
+
+    result = tools.reject_listing(seeded_listing, active_moderator, "Senior review confirms rejection.")
+    assert result["status"] == "REJECTED"
+
+
+def test_escalate_case_does_not_touch_seller_violation_count(seeded_listing_with_own_seller, active_moderator):
+    listing_id, seller_id = seeded_listing_with_own_seller
+
+    tools.escalate_case(listing_id, "Needs senior review.", active_moderator)
+
+    seller = db.get_seller(seller_id)
+    assert seller is None or seller["violation_count"] == 0
