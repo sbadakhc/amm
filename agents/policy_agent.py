@@ -4,11 +4,14 @@ categoryId. See SPEC.md §3.5. Deterministic — no model call.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 
 # inconsistencyScore above this triggers C004. Configurable (§4), not tuned against
-# real traffic yet — picked from observed scores on the demo's synthetic data.
-CONSISTENCY_THRESHOLD = 0.30
+# real traffic yet — picked from observed scores on the demo's synthetic data. Env
+# var read once at import (same pattern as service.py); run_policy_agent also takes
+# a per-call override for testing/rerunning without reloading the module.
+CONSISTENCY_THRESHOLD = float(os.environ.get("CONSISTENCY_THRESHOLD", "0.30"))
 
 RULES = {
     "W001": {"description": "Weapons prohibited", "severity": "Critical", "autoReject": False},
@@ -45,11 +48,20 @@ def _match(rule_id: str, confidence: float) -> dict:
     }
 
 
-def run_policy_agent(canonical_doc: dict, evidence: dict, consistency: dict, safety: dict) -> dict:
+def run_policy_agent(
+    canonical_doc: dict,
+    evidence: dict,
+    consistency: dict,
+    safety: dict,
+    consistency_threshold: float | None = None,
+) -> dict:
     """
     Maps EvidenceAgent/ConsistencyAgent/SafetyAgent payloads to policy rule matches and
     returns a PolicyAgent artifact (§5) ready to append to the `artifacts` table.
+    `consistency_threshold` defaults to the module constant (env-configurable, see
+    above) when not given explicitly.
     """
+    consistency_threshold = CONSISTENCY_THRESHOLD if consistency_threshold is None else consistency_threshold
     applicable = _rules_for_category(canonical_doc.get("categoryId", ""))
     matches = []
 
@@ -63,7 +75,7 @@ def run_policy_agent(canonical_doc: dict, evidence: dict, consistency: dict, saf
     if "C001" in applicable and evidence.get("brandMismatch"):
         matches.append(_match("C001", 1.0))
 
-    if "C004" in applicable and consistency.get("inconsistencyScore", 0) > CONSISTENCY_THRESHOLD:
+    if "C004" in applicable and consistency.get("inconsistencyScore", 0) > consistency_threshold:
         matches.append(_match("C004", consistency["inconsistencyScore"]))
 
     return {

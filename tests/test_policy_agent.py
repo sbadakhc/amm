@@ -58,3 +58,18 @@ def test_multiple_rules_can_match_simultaneously():
     rules = {m["rule"] for m in result["payload"]["matches"]}
 
     assert rules == {"D001", "C001", "C004"}
+
+
+def test_consistency_threshold_override_changes_routing():
+    """Same inconsistencyScore as test_clean_listing_has_no_matches (0.1, below the
+    default 0.30 threshold), but a lowered override makes it match C004 -- proves the
+    override parameter actually drives behavior, not just that the default works."""
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.1}
+    safety = {"violations": [], "confidence": 0.0}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety, consistency_threshold=0.05)
+
+    assert result["payload"]["matches"] == [
+        {"rule": "C004", "severity": "Medium", "autoReject": False, "confidence": 0.1}
+    ]

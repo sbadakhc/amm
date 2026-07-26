@@ -9,12 +9,12 @@ def _policy(matches: list[dict]) -> dict:
     return _artifact("PolicyAgent", {"matches": matches})
 
 
-def _run(canonical_doc, matches, inconsistency_score=0.05):
+def _run(canonical_doc, matches, inconsistency_score=0.05, **overrides):
     evidence = _artifact("EvidenceAgent", {})
     consistency = _artifact("ConsistencyAgent", {"inconsistencyScore": inconsistency_score})
     safety = _artifact("SafetyAgent", {})
     policy = _policy(matches)
-    return run_decision_agent(canonical_doc, evidence, consistency, safety, policy)
+    return run_decision_agent(canonical_doc, evidence, consistency, safety, policy, **overrides)
 
 
 def test_no_matches_low_inconsistency_approves():
@@ -76,3 +76,38 @@ def test_seller_history_does_not_affect_tentative_review():
     result = _run(canonical_doc, matches=[], inconsistency_score=0.3)  # base confidence 0.70, already REVIEW
     assert result["payload"]["confidence"] == 0.70
     assert result["payload"]["decision"] == "REVIEW"
+
+
+def test_auto_approve_threshold_override_changes_routing():
+    """Same inputs as test_no_matches_high_inconsistency_reviews (confidence 0.70),
+    but a lowered auto_approve_threshold flips REVIEW to APPROVE -- proves the
+    override parameter actually drives behavior, not just that the default works."""
+    result = _run(
+        {"listingId": "LST-TEST"}, matches=[], inconsistency_score=0.3, auto_approve_threshold=0.65
+    )
+    assert result["payload"]["decision"] == "APPROVE"
+
+
+def test_critical_reject_threshold_override_changes_routing():
+    """Same inputs as test_critical_match_below_threshold_reviews_not_approves
+    (confidence 0.80), but a lowered critical_reject_threshold flips REVIEW to
+    REJECT."""
+    matches = [{"rule": "W001", "severity": "Critical", "autoReject": False, "confidence": 0.80}]
+    result = _run({"listingId": "LST-TEST"}, matches=matches, critical_reject_threshold=0.75)
+    assert result["payload"]["decision"] == "REJECT"
+
+
+def test_seller_history_adjustment_override_changes_confidence():
+    """Same inputs as test_seller_history_flips_tentative_approve_to_review, but a
+    smaller per-violation adjustment leaves confidence above the approve threshold
+    instead of flipping it to REVIEW."""
+    canonical_doc = {"listingId": "LST-TEST", "sellerPreviousViolations": 3}
+    result = _run(
+        canonical_doc,
+        matches=[],
+        inconsistency_score=0.05,  # base confidence 0.95
+        seller_history_adjustment_per_violation=0.01,
+        seller_history_adjustment_cap=0.20,
+    )
+    assert result["payload"]["confidence"] == 0.92  # 0.95 - min(0.01*3, 0.20)
+    assert result["payload"]["decision"] == "APPROVE"
