@@ -17,3 +17,4 @@ covered by SPEC.md.
 | [0003](0003-decision-fusion-formula.md) | Decision fusion is a deterministic 3-step formula |
 | [0004](0004-locking-model.md) | Claim listings with `FOR UPDATE SKIP LOCKED`, no broker |
 | [0005](0005-find-similar-cases-heuristic.md) | find_similar_cases is a heuristic, not embeddings |
+| [0006](0006-s3-storage-self-hosted-minio.md) | S3 image storage: boto3 against a configurable endpoint, self-hosted via MinIO for dev |

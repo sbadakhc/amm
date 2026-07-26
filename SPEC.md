@@ -151,8 +151,10 @@ the actual listing shape:
   "condition": "new"
 }
 ```
-Images are `s3://` URIs, not HTTP URLs — Evidence and Safety agents need S3 read access
-(signed URL or SDK call) to fetch them, not a plain web fetch.
+Images are `s3://` URIs, not HTTP URLs — Evidence and Consistency Agents fetch them via
+`images.fetch_image_bytes` (a shared `boto3` helper), not a plain web fetch. Works
+against real AWS S3 or any S3-compatible store (self-hosted via MinIO for local
+dev/test — see `docs/decisions/0006-s3-storage-self-hosted-minio.md`).
 
 `declaredBrand` is carried through specifically so the Evidence Agent can cross-check it
 against whatever brand it detects from the images/OCR (see §3.2) — that mismatch is what
@@ -186,9 +188,9 @@ C001. Written as an `EvidenceAgent` artifact per §5 (this is its `payload`):
   "countryOfOrigin": "China" }
 ```
 
-Implemented in `agents/evidence_agent.py`. Images are fetched via `file://` in local
-dev/demo; `s3://` (the production scheme, §3.1) raises `NotImplementedError` until a
-signed-URL or SDK read is wired in.
+Implemented in `agents/evidence_agent.py`. Images are fetched via the shared
+`images.fetch_image_bytes` helper — `file://` for local dev/demo, `s3://` (the
+production scheme, §3.1) via `boto3`.
 
 ### 3.3 Consistency Agent
 Cross-checks fields that should agree with each other but are supplied independently:

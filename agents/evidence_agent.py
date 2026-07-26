@@ -8,13 +8,19 @@ brand(s) against the canonical document's declaredBrand and flags a mismatch.
 
 import base64
 import json
-import mimetypes
 import os
 from datetime import datetime, timezone
-from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
+
+try:
+    from images import fetch_image_bytes
+except ImportError:  # running as a script, not a package -- repo root isn't on sys.path
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from images import fetch_image_bytes
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODEL = "nvidia/nemotron-nano-12b-v2-vl"
@@ -31,18 +37,8 @@ EXTRACTION_PROMPT = (
 
 
 def _load_image_b64(url: str) -> tuple[str, str]:
-    """Returns (base64 bytes, mime type) for an image URL. file:// for local dev/demo;
-    s3:// is the production scheme (§3.1) and needs a signed URL or SDK call wired in
-    here once real object storage is in place."""
-    parsed = urlparse(url)
-    if parsed.scheme == "file":
-        path = Path(parsed.path)
-        data = path.read_bytes()
-        mime = mimetypes.guess_type(path.name)[0] or "image/png"
-    elif parsed.scheme == "s3":
-        raise NotImplementedError(f"s3:// image fetch not wired up yet: {url}")
-    else:
-        raise ValueError(f"Unsupported image URL scheme: {url}")
+    """Returns (base64 bytes, mime type) for an image URL (file:// or s3://, §3.1)."""
+    data, mime = fetch_image_bytes(url)
     return base64.b64encode(data).decode("ascii"), mime
 
 
