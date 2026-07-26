@@ -239,12 +239,21 @@ verdict with no category, and Policy Agent needs a category to pick a rule). Cla
 
 `confidence` is the model's own log-probability for the safe/unsafe token it emitted
 (`logprobs: true` on the chat completion), not a separately requested score. `violations`
-is the model's raw `Safety Categories` string, split on `,` — known categories include
-at least `Guns and Illegal Weapons`, `Controlled/Regulated Substances`,
-`Criminal Planning/Confessions`, `Fraud/Deception`; confirm the full taxonomy against
-the model card before finalizing the Policy Agent's rule-trigger table in §3.5.
-`explanation` is generated deterministically from the category list, not model-written
-prose.
+is the model's raw `Safety Categories` string, split on `,`.
+
+Full taxonomy confirmed empirically (`docs/decisions/0012`) — real calls to the real
+model with one prompt per suspected category, not a scraped model-card page.
+Categories observed: `Guns and Illegal Weapons`, `Controlled/Regulated Substances`,
+`Criminal Planning/Confessions`, `Illegal Activity`, `Fraud/Deception`, `Sexual`,
+`Sexual (minor)`, `PII/Privacy`, `Hate/Identity Hate`, `Immoral/Unethical`,
+`Suicide and Self Harm`, `Violence`, `Harassment`, `Profanity`,
+`Copyright/Trademark/Plagiarism`, `Political/Misinformation/Conspiracy`,
+`Needs Caution`. Only the subset that's clearly marketplace-listing-policy relevant
+maps to a Policy Agent rule (§3.5) — most of the rest are general chat-safety
+categories (violence, hate speech, profanity, misinformation) not obviously
+actionable on a product listing; revisit if this pipeline's scope ever grows beyond
+listing text. `explanation` is generated deterministically from the category list,
+not model-written prose.
 
 **Out**
 ```json
@@ -260,12 +269,20 @@ Maps evidence/safety/consistency findings to policy rules, keyed off `categoryId
 policy — a listing under `electronics.*` and one under `finance.*` check different rule
 sets. Returns an **array** — a listing can match more than one rule.
 
-| Rule ID | Description | Triggered by |
-|---|---|---|
-| W001 | Weapons prohibited | Safety Agent `violations` contains `Guns and Illegal Weapons` |
-| C001 | Counterfeit goods prohibited | Evidence Agent `brandMismatch: true` |
-| C004 | Misleading product information | Consistency Agent `inconsistencyScore` above threshold |
-| D001 | Illegal drugs prohibited | Safety Agent `violations` contains `Controlled/Regulated Substances` |
+| Rule ID | Description | Severity | Triggered by |
+|---|---|---|---|
+| W001 | Weapons prohibited | Critical | Safety Agent `violations` contains `Guns and Illegal Weapons` |
+| C001 | Counterfeit goods prohibited | High | Evidence Agent `brandMismatch: true`, or Safety Agent `violations` contains `Copyright/Trademark/Plagiarism` |
+| C004 | Misleading product information | Medium | Consistency Agent `inconsistencyScore` above threshold |
+| D001 | Illegal drugs prohibited | Critical | Safety Agent `violations` contains `Controlled/Regulated Substances` |
+| F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception` |
+| S001 | Sexual content involving minors prohibited | Critical, **autoReject** | Safety Agent `violations` contains `Sexual (minor)` |
+
+C001's two triggers are deduped to at most one match (the higher of the two
+confidences) — never two separate `C001` entries in `matches` even if both signals
+fire. The `Copyright/Trademark/Plagiarism` text signal was confirmed unreliable in
+testing (`docs/decisions/0012`) — treat it as a secondary signal, not a substitute for
+Evidence Agent's image-based `brandMismatch`.
 
 Each match also carries a `confidence`, attributed from whichever upstream agent's signal
 triggered the rule — Policy Agent passes through that agent's number rather than
@@ -273,8 +290,8 @@ inventing its own probability:
 
 | Rule triggered by | `confidence` source |
 |---|---|
-| SafetyAgent violation (W001, D001) | `SafetyAgent.payload.confidence` |
-| EvidenceAgent `brandMismatch: true` (C001) | `1.0` — deterministic OCR/logo comparison, not a probability |
+| SafetyAgent violation (W001, D001, F001, S001) | `SafetyAgent.payload.confidence` |
+| EvidenceAgent `brandMismatch: true` and/or SafetyAgent `Copyright/Trademark/Plagiarism` (C001) | `max(1.0 if brandMismatch, SafetyAgent.payload.confidence if the category fired)` |
 | ConsistencyAgent `inconsistencyScore` above threshold (C004) | `ConsistencyAgent.payload.inconsistencyScore` |
 
 Written as a `PolicyAgent` artifact per §5.
@@ -287,10 +304,10 @@ Written as a `PolicyAgent` artifact per §5.
 ```
 
 Deterministic — pure rule logic over the three upstream payloads, no model call.
-Implemented in `agents/policy_agent.py`. `autoReject` is `false` for every current rule
-(matches the example above); it's a reserved hard-override lever for a future rule that
-should bypass confidence-based routing entirely (§4 step 1), not something today's four
-rules use. `CONSISTENCY_THRESHOLD` (0.30) for C004 is a first pass from observed scores
+Implemented in `agents/policy_agent.py`. `autoReject` is `true` only for S001 — the
+hard-override lever reserved since the original spec (§4 step 1) for a rule that should
+bypass confidence-based routing entirely; every other rule leaves it `false`.
+`CONSISTENCY_THRESHOLD` (0.30) for C004 is a first pass from observed scores
 on the demo's synthetic data, not tuned against real traffic. Configurable via the
 `CONSISTENCY_THRESHOLD` env var (read once at process start) or a per-call override on
 `run_policy_agent` — see `docs/decisions/0008-env-var-thresholds.md`.

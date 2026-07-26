@@ -60,6 +60,55 @@ def test_multiple_rules_can_match_simultaneously():
     assert rules == {"D001", "C001", "C004"}
 
 
+def test_fraud_violation_maps_to_f001():
+    safety = {"violations": ["Fraud/Deception"], "confidence": 0.95}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.95}]
+
+
+def test_sexual_minor_violation_maps_to_s001_autoreject():
+    safety = {"violations": ["Sexual (minor)"], "confidence": 0.99}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "S001", "severity": "Critical", "autoReject": True, "confidence": 0.99}]
+
+
+def test_copyright_safety_category_maps_to_c001():
+    """Text-based counterfeit signal (Safety Agent), distinct from the image-based
+    brandMismatch (Evidence Agent) -- both land on the same C001 rule."""
+    safety = {"violations": ["Copyright/Trademark/Plagiarism"], "confidence": 0.8}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "C001", "severity": "High", "autoReject": False, "confidence": 0.8}]
+
+
+def test_brand_mismatch_and_copyright_category_dedupe_to_one_c001_match():
+    """Both C001 signals firing at once must not produce two matches for the same
+    rule (policyRules would end up with a duplicate 'C001' otherwise) -- takes the
+    higher of the two confidences."""
+    safety = {"violations": ["Copyright/Trademark/Plagiarism"], "confidence": 0.6}
+    evidence = {"brandMismatch": True}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "C001", "severity": "High", "autoReject": False, "confidence": 1.0}]
+
+
 def test_consistency_threshold_override_changes_routing():
     """Same inconsistencyScore as test_clean_listing_has_no_matches (0.1, below the
     default 0.30 threshold), but a lowered override makes it match C004 -- proves the
