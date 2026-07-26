@@ -23,6 +23,12 @@ DECISION_TO_STATUS = {
     # Moderator-only (cli.tools.escalate_case, §8.2/§8.4) -- the automated Decision
     # Agent's _route (§4) never emits this, only APPROVE/REJECT/REVIEW.
     "ESCALATE": "ESCALATED",
+    # Moderator-only (cli.tools.request_appeal, §8.2/§8.4). Resolving an appeal
+    # reuses APPROVE/REJECT above rather than a separate APPEAL_APPROVED/DENIED
+    # status -- nothing needs a listing in any status but APPROVED/REJECTED to
+    # determine liveness, and the artifact log (§5) already distinguishes an appeal
+    # resolution via its `version` field.
+    "REQUEST_APPEAL": "APPEAL_REQUESTED",
 }
 
 
