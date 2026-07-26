@@ -226,3 +226,41 @@ def find_similar_by_embedding(listing_id: str, k: int = 5) -> list[dict]:
             (listing_id, listing_id, k),
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def upsert_seller_if_missing(seller_id: str, initial_violation_count: int = 0) -> None:
+    """Creates a `sellers` row the first time a seller is seen (§8.3,
+    docs/decisions/0017) -- a no-op if one already exists, so repeated calls (e.g.
+    once per listing from the same seller) never reset `violation_count`."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO sellers (seller_id, violation_count)
+            VALUES (%s, %s)
+            ON CONFLICT (seller_id) DO NOTHING
+            """,
+            (seller_id, initial_violation_count),
+        )
+        conn.commit()
+
+
+def increment_seller_violations(seller_id: str) -> None:
+    """Called whenever a listing lands on REJECTED (§8.3) -- both the automated
+    Decision Agent path (`pipeline.process_listing`) and a moderator's override
+    (`cli.tools.record_decision`)."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE sellers SET violation_count = violation_count + 1, updated_at = now() WHERE seller_id = %s",
+            (seller_id,),
+        )
+        conn.commit()
+
+
+def get_seller(seller_id: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM sellers WHERE seller_id = %s", (seller_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None

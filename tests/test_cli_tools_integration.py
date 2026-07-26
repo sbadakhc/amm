@@ -152,3 +152,67 @@ def test_find_similar_cases_ranks_by_embedding_distance(seeded_listing):
             cur.execute("DELETE FROM listing_embeddings WHERE listing_id = %s", (other_id,))
             cur.execute("DELETE FROM listings WHERE listing_id = %s", (other_id,))
             conn.commit()
+
+
+@pytest.fixture
+def seeded_listing_with_own_seller():
+    """Same shape as `seeded_listing`, but with a unique sellerId rather than the
+    shared 'SUP-TEST' -- needed for §8.3 tests below since record_decision(REJECT)
+    now creates/increments a real `sellers` row keyed by sellerId, and sharing one
+    across tests would make violation_count assertions order-dependent."""
+    listing_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
+    seller_id = f"SUP-TEST-{uuid.uuid4().hex[:6].upper()}"
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO listings
+                (listing_id, seller, title, description, category, price, quantity,
+                 condition, brand, model, sku, images, attributes, shipping, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                listing_id,
+                json.dumps({"sellerId": seller_id, "verified": True, "previousViolations": 0}),
+                "Test Listing",
+                "A test listing.",
+                json.dumps({"id": "electronics.mobile", "name": "Mobile Phones"}),
+                json.dumps({"amount": 1.0, "currency": "GBP"}),
+                1,
+                "new",
+                "Apple",
+                "Test",
+                "SKU-TEST",
+                json.dumps([]),
+                json.dumps({}),
+                json.dumps({}),
+                "PENDING_REVIEW",
+            ),
+        )
+        conn.commit()
+
+    yield listing_id, seller_id
+
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM artifacts WHERE listing_id = %s", (listing_id,))
+        cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
+        cur.execute("DELETE FROM sellers WHERE seller_id = %s", (seller_id,))
+        conn.commit()
+
+
+def test_reject_listing_increments_seller_violation_count(seeded_listing_with_own_seller, active_moderator):
+    listing_id, seller_id = seeded_listing_with_own_seller
+
+    tools.reject_listing(listing_id, active_moderator, "Counterfeit.")
+
+    assert db.get_seller(seller_id)["violation_count"] == 1
+
+
+def test_approve_listing_does_not_touch_seller_violation_count(seeded_listing_with_own_seller, active_moderator):
+    listing_id, seller_id = seeded_listing_with_own_seller
+
+    tools.approve_listing(listing_id, active_moderator, "Looks fine.")
+
+    seller = db.get_seller(seller_id)
+    assert seller is None or seller["violation_count"] == 0
