@@ -525,6 +525,14 @@ Not an external OS image viewer directly -- see
 interop disabled, no display server on the dev host) and how both fallbacks were
 verified against a real Windows browser.
 
+For surveying multiple listings rather than deep-diving one, `--queue` (optionally
+`--status <status>[,<status>...]`) prints a single markdown table -- listing ID,
+title, status, decision, confidence, policy rules, and an image link per row --
+backed by one persistent image server covering every listing's images at once,
+instead of restarting a server per listing. Added after real moderator feedback that
+the per-listing flow was too much friction with no decision/confidence visibility —
+see `docs/decisions/0015-inspect-listing-queue-table.md`.
+
 **Moderator identity.** `moderatorId` is checked against a `moderators` table
 (`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,
 no tokens, no login flow, because the CLI is a tool layer driven by a trusted operator
