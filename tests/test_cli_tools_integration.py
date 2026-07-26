@@ -300,3 +300,55 @@ def test_resolve_appeal_rejects_invalid_decision(seeded_listing, active_moderato
 
     with pytest.raises(ValueError, match="decision must be APPROVE or REJECT"):
         tools.resolve_appeal(seeded_listing, "ESCALATE", "nonsense", active_moderator)
+
+
+def test_list_seller_cases_returns_only_that_sellers_listings(seeded_listing_with_own_seller):
+    listing_id, seller_id = seeded_listing_with_own_seller
+
+    cases = tools.list_seller_cases(seller_id)
+
+    assert [c["listing_id"] for c in cases] == [listing_id]
+
+
+def test_suspend_seller_moves_active_to_suspended(seeded_listing_with_own_seller, active_moderator):
+    _, seller_id = seeded_listing_with_own_seller
+    db.upsert_seller_if_missing(seller_id)
+
+    result = tools.suspend_seller(seller_id, "Multiple weapon listings.", active_moderator)
+
+    assert result["status"] == "SUSPENDED"
+    assert result["status_reason"] == "Multiple weapon listings."
+    assert result["status_changed_by"] == active_moderator
+
+
+def test_suspend_seller_rejects_already_suspended(seeded_listing_with_own_seller, active_moderator):
+    _, seller_id = seeded_listing_with_own_seller
+    db.upsert_seller_if_missing(seller_id)
+    tools.suspend_seller(seller_id, "First suspension.", active_moderator)
+
+    with pytest.raises(ValueError, match="Can only suspend an ACTIVE seller"):
+        tools.suspend_seller(seller_id, "Second attempt.", active_moderator)
+
+
+def test_suspend_seller_rejects_unknown_seller(active_moderator):
+    with pytest.raises(ValueError, match="No such seller"):
+        tools.suspend_seller("SUP-DOES-NOT-EXIST", "reason", active_moderator)
+
+
+def test_reinstate_seller_moves_suspended_to_active(seeded_listing_with_own_seller, active_moderator):
+    _, seller_id = seeded_listing_with_own_seller
+    db.upsert_seller_if_missing(seller_id)
+    tools.suspend_seller(seller_id, "Suspended.", active_moderator)
+
+    result = tools.reinstate_seller(seller_id, "Investigation cleared them.", active_moderator)
+
+    assert result["status"] == "ACTIVE"
+    assert result["status_reason"] == "Investigation cleared them."
+
+
+def test_reinstate_seller_rejects_already_active(seeded_listing_with_own_seller, active_moderator):
+    _, seller_id = seeded_listing_with_own_seller
+    db.upsert_seller_if_missing(seller_id)
+
+    with pytest.raises(ValueError, match="Can only reinstate a SUSPENDED seller"):
+        tools.reinstate_seller(seller_id, "reason", active_moderator)

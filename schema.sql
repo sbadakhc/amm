@@ -76,11 +76,17 @@ CREATE INDEX IF NOT EXISTS idx_listing_embeddings_hnsw
 -- record_decision), unlike `listings.seller->>'previousViolations'`, which stays a
 -- static snapshot taken at listing submission time and is not touched by this table.
 -- Not yet read by Decision Agent's confidence fusion (§4) -- that remains a
--- separate, later change.
+-- separate, later change. `status_reason`/`status_changed_by` record why/who for the
+-- last status transition (cli.tools.suspend_seller/reinstate_seller, §8.4) --
+-- consistent with every other mutating action in this project requiring a reason.
+-- TERMINATED is a valid status but has no tool that produces it yet (no
+-- terminate_seller -- not scoped/requested, §8.4).
 CREATE TABLE IF NOT EXISTS sellers (
-    seller_id       TEXT PRIMARY KEY,
-    status          TEXT NOT NULL DEFAULT 'ACTIVE',
-    violation_count INTEGER NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    seller_id          TEXT PRIMARY KEY,
+    status             TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'SUSPENDED', 'TERMINATED')),
+    status_reason      TEXT,
+    status_changed_by  TEXT,
+    violation_count    INTEGER NOT NULL DEFAULT 0,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

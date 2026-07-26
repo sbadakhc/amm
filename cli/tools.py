@@ -227,6 +227,42 @@ def resolve_appeal(listing_id: str, decision: str, reason: str, moderator_id: st
     return db.get_listing_row(listing_id)
 
 
+def list_seller_cases(seller_id: str) -> list[dict]:
+    """`list_seller_cases(sellerId)` (§8.4) -- every listing tied to one seller."""
+    return db.list_listings_by_seller(seller_id)
+
+
+def suspend_seller(seller_id: str, reason: str, moderator_id: str | None = None) -> dict:
+    """`suspend_seller(sellerId, reason, moderatorId?)` (§8.4) -- moves a seller's
+    placeholder account (§8.3) from ACTIVE to SUSPENDED. Only valid from ACTIVE.
+    Does not cascade to the seller's existing listings (e.g. auto-rejecting pending
+    ones) -- a known simplification, not solved here; each listing is still decided
+    on its own via the normal tools."""
+    moderator_id = _resolve_moderator(moderator_id)
+    seller = db.get_seller(seller_id)
+    if seller is None:
+        raise ValueError(f"No such seller: {seller_id}")
+    if seller["status"] != "ACTIVE":
+        raise ValueError(f"Can only suspend an ACTIVE seller, got status {seller['status']!r}")
+    db.update_seller_status(seller_id, "SUSPENDED", reason, moderator_id)
+    return db.get_seller(seller_id)
+
+
+def reinstate_seller(seller_id: str, reason: str, moderator_id: str | None = None) -> dict:
+    """`reinstate_seller(sellerId, reason, moderatorId?)` (§8.4) -- moves a seller's
+    placeholder account (§8.3) from SUSPENDED back to ACTIVE. Only valid from
+    SUSPENDED -- there is no `terminate_seller` tool, so TERMINATED is a valid schema
+    status (§8.1) that nothing currently produces, not reachable from here."""
+    moderator_id = _resolve_moderator(moderator_id)
+    seller = db.get_seller(seller_id)
+    if seller is None:
+        raise ValueError(f"No such seller: {seller_id}")
+    if seller["status"] != "SUSPENDED":
+        raise ValueError(f"Can only reinstate a SUSPENDED seller, got status {seller['status']!r}")
+    db.update_seller_status(seller_id, "ACTIVE", reason, moderator_id)
+    return db.get_seller(seller_id)
+
+
 def rerun_analysis(listing_id: str, agent: str | None = None) -> dict:
     """`rerun_analysis(listingId, agent?)` (§6). Appends new artifact(s) rather than
     overwriting (§5) — safe to call on a terminal listing, e.g. after a model upgrade.

@@ -264,3 +264,31 @@ def get_seller(seller_id: str) -> dict | None:
         cur.execute("SELECT * FROM sellers WHERE seller_id = %s", (seller_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def list_listings_by_seller(seller_id: str) -> list[dict]:
+    """Every listing tied to one seller (§8.4's `list_seller_cases`) -- `sellerId` is
+    embedded JSONB on `listings`, not a foreign key, since `sellers` is a placeholder
+    (§8.1), not the real source of truth for seller identity."""
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM listings WHERE seller->>'sellerId' = %s ORDER BY created_at",
+            (seller_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_seller_status(seller_id: str, status: str, reason: str, moderator_id: str) -> None:
+    """Backs `cli.tools.suspend_seller`/`reinstate_seller` (§8.4)."""
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE sellers
+            SET status = %s, status_reason = %s, status_changed_by = %s, updated_at = now()
+            WHERE seller_id = %s
+            """,
+            (status, reason, moderator_id, seller_id),
+        )
+        conn.commit()

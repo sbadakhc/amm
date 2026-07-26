@@ -131,3 +131,38 @@ APPEAL_REQUESTED → REJECTED, violation count stayed at 1, not double-counted);
 appeal approved (REJECTED → APPEAL_REQUESTED → APPROVED, overturning); guard against
 appealing an `APPROVED` listing; guard against resolving a non-`APPEAL_REQUESTED`
 listing; guard against an invalid `resolve_appeal` decision value.
+
+After this PR merged, the human questioned whether appeals should have been built at
+all ("didn't we say we didn't want appeals?") -- the "don't build what we won't use"
+principle used to scope the sellers table could reasonably be read either narrowly
+(don't model seller identity/auth, which is how it was applied) or broadly (don't
+build appeals at all, since nothing feeds an appeal into this system yet). Decided to
+keep it as built after discussing the ambiguity directly -- moderator-invoked-only,
+zero seller-identity assumptions, still useful for relaying an appeal through any
+future channel. Lesson captured for next time: confirm which reading of a general
+scoping principle is meant *before* building, not after
+([[confirm-scope-explicitly-not-inferred]]).
+
+## Update: fourth piece implemented (account actions) -- all of §8 now built
+
+`list_seller_cases`, `suspend_seller`, `reinstate_seller` (§8.4) landed last, closing
+out §8. Confirmed explicitly with the human before starting (applying the lesson
+above): unlike appeals, these have no external-channel dependency -- a moderator can
+use "show me everything from this seller" or "suspend this account" today, from data
+already in Postgres.
+
+`sellers` gained `status_reason`/`status_changed_by` columns (not in the original
+§8.3 sketch) so a status change carries the same audit completeness as every other
+mutating action in this project (`reject_listing`, `escalate_case`, etc. all require
+a `reason`) -- added a CHECK constraint restricting `status` to
+`ACTIVE`/`SUSPENDED`/`TERMINATED` at the same time. `suspend_seller` only valid from
+`ACTIVE`, `reinstate_seller` only valid from `SUSPENDED`. No `terminate_seller` tool
+-- `TERMINATED` is a valid schema value nothing produces yet, not requested. Neither
+tool cascades to the seller's existing listings (e.g. auto-rejecting pending ones on
+suspension) -- each listing is still decided independently, stated as a known
+simplification rather than silently assumed.
+
+Verified against real Postgres: suspend ACTIVE → SUSPENDED with reason/moderator
+recorded; reinstate SUSPENDED → ACTIVE; guards against suspending an
+already-suspended seller, reinstating an already-active seller, an unknown seller,
+and an unknown moderator all raise correctly.
