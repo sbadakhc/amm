@@ -18,18 +18,30 @@ RULES = {
     "C001": {"description": "Counterfeit goods prohibited", "severity": "High", "autoReject": False},
     "C004": {"description": "Misleading product information", "severity": "Medium", "autoReject": False},
     "D001": {"description": "Illegal drugs prohibited", "severity": "Critical", "autoReject": False},
+    "F001": {"description": "Fraud or deceptive listings prohibited", "severity": "High", "autoReject": False},
+    "S001": {"description": "Sexual content involving minors prohibited", "severity": "Critical", "autoReject": True},
 }
 
+# Confirmed against real calls to nvidia/llama-3.1-nemotron-safety-guard-8b-v3
+# (docs/decisions/0012) -- not every category the model can emit is listing-policy
+# relevant (e.g. Violence, Hate/Identity Hate, Profanity are chat-safety categories,
+# not obviously actionable on a product listing), so only the ones that are get a
+# rule. "Copyright/Trademark/Plagiarism" deliberately maps to C001 too (handled
+# specially below, not through this dict) rather than getting its own rule -- it's
+# the same underlying violation (counterfeit goods) as Evidence Agent's brandMismatch
+# signal, just detected from listing text instead of images.
 SAFETY_CATEGORY_TO_RULE = {
     "Guns and Illegal Weapons": "W001",
     "Controlled/Regulated Substances": "D001",
+    "Fraud/Deception": "F001",
+    "Sexual (minor)": "S001",
 }
 
 # Rule sets are looked up per category (§3.5); "*" is the catch-all applied whenever a
 # category has no more specific entry. No category narrows this further yet — add a
 # prefix key (e.g. "finance") to scope rules to just that category tree.
 RULE_SETS_BY_CATEGORY_PREFIX = {
-    "*": ["W001", "C001", "C004", "D001"],
+    "*": ["W001", "C001", "C004", "D001", "F001", "S001"],
 }
 
 
@@ -72,8 +84,19 @@ def run_policy_agent(
             matches.append(_match(rule_id, safety["confidence"]))
             matched_safety_rules.add(rule_id)
 
-    if "C001" in applicable and evidence.get("brandMismatch"):
-        matches.append(_match("C001", 1.0))
+    if "C001" in applicable:
+        # Two independent signals for the same underlying violation (counterfeit
+        # goods): Evidence Agent's image-based brandMismatch and Safety Agent's
+        # text-based Copyright/Trademark/Plagiarism category. At most one C001 match
+        # is ever added (not one per signal) -- run_policy_agent's callers assume
+        # policyRules has no duplicate rule ids (§5's DecisionAgent artifact).
+        c001_confidences = []
+        if evidence.get("brandMismatch"):
+            c001_confidences.append(1.0)
+        if "Copyright/Trademark/Plagiarism" in safety.get("violations", []):
+            c001_confidences.append(safety["confidence"])
+        if c001_confidences:
+            matches.append(_match("C001", max(c001_confidences)))
 
     if "C004" in applicable and consistency.get("inconsistencyScore", 0) > consistency_threshold:
         matches.append(_match("C004", consistency["inconsistencyScore"]))

@@ -50,8 +50,9 @@ def test_high_severity_match_reviews():
 
 
 def test_autoreject_overrides_confidence():
-    """No current rule sets autoReject=True (§3.5) -- this exercises the hard-override
-    lever itself, independent of confidence, for whenever one does."""
+    """S001 (§3.5) is the one rule that sets autoReject=True today, but this test
+    constructs the match directly to exercise the hard-override lever itself,
+    independent of confidence and of which specific rule triggers it."""
     matches = [{"rule": "C004", "severity": "Medium", "autoReject": True, "confidence": 0.1}]
     result = _run({"listingId": "LST-TEST"}, matches=matches)
     assert result["payload"]["decision"] == "REJECT"
