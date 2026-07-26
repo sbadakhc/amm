@@ -111,3 +111,31 @@ def test_sweep_stale_processing_resets_old_rows(seeded_listing):
     db.sweep_stale_processing(timeout_minutes=5)
     row = db.get_listing_row(seeded_listing)
     assert row["status"] == "PENDING_REVIEW"
+
+
+@pytest.fixture
+def seeded_moderator():
+    moderator_id = f"mod-test-{uuid.uuid4().hex[:6]}"
+    db.create_moderator(moderator_id, "Test Moderator", active=True)
+    yield moderator_id
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM moderators WHERE moderator_id = %s", (moderator_id,))
+        conn.commit()
+
+
+def test_create_and_get_moderator(seeded_moderator):
+    moderator = db.get_moderator(seeded_moderator)
+    assert moderator["name"] == "Test Moderator"
+    assert moderator["active"] is True
+
+
+def test_get_unknown_moderator_returns_none():
+    assert db.get_moderator("no-such-moderator") is None
+
+
+def test_create_moderator_upserts_on_conflict(seeded_moderator):
+    db.create_moderator(seeded_moderator, "Renamed", active=False)
+    moderator = db.get_moderator(seeded_moderator)
+    assert moderator["name"] == "Renamed"
+    assert moderator["active"] is False

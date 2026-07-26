@@ -149,3 +149,25 @@ def latest_artifact(listing_id: str, agent: str) -> dict | None:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def get_moderator(moderator_id: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM moderators WHERE moderator_id = %s", (moderator_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def create_moderator(moderator_id: str, name: str, active: bool = True) -> None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO moderators (moderator_id, name, active)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (moderator_id) DO UPDATE SET name = EXCLUDED.name, active = EXCLUDED.active
+            """,
+            (moderator_id, name, active),
+        )
+        conn.commit()
