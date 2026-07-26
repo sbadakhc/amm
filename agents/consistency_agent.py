@@ -8,14 +8,20 @@ than reusing Evidence Agent's output, since it depends only on the canonical doc
 import base64
 import json
 import math
-import mimetypes
 import os
 import statistics
 from datetime import datetime, timezone
-from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
+
+try:
+    from images import fetch_image_bytes
+except ImportError:  # running as a script, not a package -- repo root isn't on sys.path
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from images import fetch_image_bytes
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 TEXT_MODEL = "mistralai/mistral-nemotron"
@@ -23,12 +29,9 @@ VISION_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
 
 
 def _load_image_data_url(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.scheme != "file":
-        raise NotImplementedError(f"Unsupported image URL scheme for {url}")
-    path = Path(parsed.path)
-    mime = mimetypes.guess_type(path.name)[0] or "image/png"
-    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    """Returns a data: URL for an image URL (file:// or s3://, §3.1)."""
+    data, mime = fetch_image_bytes(url)
+    b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
 
 
