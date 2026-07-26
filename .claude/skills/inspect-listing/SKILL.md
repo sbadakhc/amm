@@ -103,3 +103,9 @@ they've picked a specific case from the table.
   call, so it's safe to call repeatedly without manually stopping in between -- but
   still stop it explicitly (step 6) once the moderator is done, rather than leaving
   it listening.
+- **Forward reference, not yet relevant**: SPEC.md §8 (`docs/decisions/0017`) scopes
+  planned escalation tiers, appeal states, and seller-account entities -- none of
+  which exist yet. Once they do, this skill will need extending (e.g. `--queue`
+  gaining an escalation-tier/appeal-status column, or a seller-level view grouping
+  cases by `sellerId`). Not something to build proactively; noted here so it's not
+  missed when that work happens.

@@ -510,6 +510,10 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 | `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
 | `whoami(moderatorId?)` | — | moderator's own registry entry |
 
+Planned additions (escalation/appeals/seller accounts, not yet implemented) are
+tracked separately in §8.4 rather than this table, since they depend on state-machine
+and schema changes (§8.2/§8.3) that don't exist yet.
+
 **Inspecting a case's images.** `show_images` returns raw `s3://`/`file://` URLs, not
 viewable pixels. `.claude/skills/inspect-listing/` (invoked as `/inspect-listing
 <listingId>` or proactively when a moderator asks to see a case) runs
@@ -578,3 +582,83 @@ embedding and `find_similar_cases` raises rather than silently returning nothing
 6. Decision + audit record persisted.
 7. If REVIEW → listing enters the CLI queue.
 8. Moderator reviews and calls `record_decision()` to close it out.
+
+---
+
+## 8. Planned: Escalation, Appeals, and Seller Accounts (not yet implemented)
+
+**Status: scoping only.** Nothing in this section exists in code yet -- captured here
+ahead of implementation so the intended direction is documented before it's built, not
+reverse-engineered from a diff later. See `docs/decisions/0017` for the full context,
+cited research, and the reasoning below.
+
+### 8.1 Why this is split from the rest of the spec
+
+This project doesn't know whether or how it will eventually integrate with a real
+marketplace's existing seller/account backend. That backend, if one exists, almost
+certainly already owns seller identity and enforcement state. Building an opinionated
+`sellers` table now and assuming it's the source of truth risks a full rewrite once
+the real integration contract is known. The plan instead:
+
+- **Build now, portable regardless of backend**: escalation-tiering rules, the appeal
+  state machine, the audit-trail shape (this project's existing append-only artifact
+  log, §5, already generalizes to appeal records without modification).
+- **Explicit placeholder, not a foundation**: any `sellers` table this project adds
+  is a stand-in, not assumed to be the real source of truth -- same scoping pattern as
+  `docs/decisions/0009`'s moderator-auth registry. Integrating a real backend later
+  means writing a sync/adapter layer and migrating this placeholder, not rewriting the
+  escalation/appeal logic itself.
+
+### 8.2 Planned listing state machine extension
+
+Extends §2's state machine -- terminal states gain defined transitions back out
+rather than staying permanently terminal:
+
+```
+PENDING_REVIEW →
+    ESCALATED (senior-review tier, for high-stakes/repeat-offender cases)
+        → APPROVED | REJECTED (by senior reviewer)
+
+APPROVED / REJECTED (currently terminal, §2) →
+    APPEAL_REQUESTED (seller- or moderator-initiated)
+        → APPEAL_APPROVED (reverses the original decision, new terminal state)
+        → APPEAL_DENIED (original decision stands, new terminal state)
+```
+
+`ESCALATED` addresses the gap between today's binary REVIEW/REJECT split and the
+industry-standard tiered pattern (auto → confidence-routed human → senior human
+review, per `docs/decisions/0017`). Appeal states give REJECTED/APPROVED a defined
+way back into the review process instead of being permanently final.
+
+### 8.3 Planned seller-account model (placeholder, see 8.1)
+
+A `sellers` table, keyed loosely to the existing embedded `seller.sellerId` JSONB
+field on `listings` (§3.1) rather than replacing it outright:
+
+- `seller_id`, `status` (`ACTIVE` / `SUSPENDED` / `TERMINATED`), `violation_count`
+  (a live counter, incremented on REJECT/APPEAL_DENIED -- unlike today's
+  `sellerPreviousViolations`, which is a static snapshot copied onto each listing at
+  submission time and never updated by pipeline outcomes).
+- Account-level status changes progressively (warning → listing suppression →
+  suspension → termination, per `docs/decisions/0017`'s cited pattern), not a single
+  binary suspend/not-suspended flag.
+
+### 8.4 Planned CLI tools (not yet implemented)
+
+Extends §6's tool table:
+
+| Tool | Purpose |
+|---|---|
+| `escalate_case(listingId, reason)` | Moves a `PENDING_REVIEW` case to `ESCALATED` for senior-reviewer attention |
+| `request_appeal(listingId, reason)` | Reopens a terminal (APPROVED/REJECTED) listing into `APPEAL_REQUESTED` |
+| `resolve_appeal(listingId, decision, reason)` | Senior moderator closes an appeal -- reverses or upholds the original decision |
+| `list_seller_cases(sellerId)` | Every listing tied to one seller -- not possible today without an ad hoc scan (no `sellers` table, §8.1) |
+| `suspend_seller(sellerId, reason)` / `reinstate_seller(sellerId)` | Account-level actions against the placeholder `sellers` table (§8.3) |
+
+### 8.5 Also noted, not yet addressed here
+
+Separate friction points surfaced in the same discussion, not part of this section's
+scope: no case ownership/locking between multiple human moderators working the same
+`PENDING_REVIEW` queue (§2.1's `FOR UPDATE SKIP LOCKED` only guards the automated
+pipeline's claim of `PENDING_MODERATION`); no SLA/aging or severity sort in
+`/inspect-listing --queue`; no batch actions across multiple cases at once.
