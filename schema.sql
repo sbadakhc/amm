@@ -54,13 +54,17 @@ CREATE TABLE IF NOT EXISTS moderators (
 -- see embeddings.py), computed during pipeline.run_fusion. Backs find_similar_cases
 -- (§6) via pgvector's cosine distance operator (<=>), replacing the category+rule-
 -- overlap heuristic (docs/decisions/0005, superseded by 0010).
--- No HNSW/ivfflat index: pgvector caps both at 2000 dimensions and this model
--- produces 2048 (halfvec would work around that, but a sequential scan over <=> is
--- trivially fast at this project's current data volume -- add an index, or switch to
--- halfvec, only once real volume makes it necessary).
+-- halfvec, not vector: pgvector's HNSW/ivfflat index types cap plain `vector` at 2000
+-- dimensions and this model produces 2048. halfvec (half-precision) raises that cap
+-- to 4000 -- verified against the real pgvector version this project's dev-db image
+-- ships (0.8.5) before committing to it, not assumed from docs. See
+-- docs/decisions/0016 for the precision trade-off.
 CREATE TABLE IF NOT EXISTS listing_embeddings (
     listing_id      TEXT PRIMARY KEY REFERENCES listings(listing_id),
     model           TEXT NOT NULL,
-    embedding       vector(2048) NOT NULL,
+    embedding       halfvec(2048) NOT NULL,
     produced_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_listing_embeddings_hnsw
+    ON listing_embeddings USING hnsw (embedding halfvec_cosine_ops);

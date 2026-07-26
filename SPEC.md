@@ -553,11 +553,13 @@ status; the two convenience wrappers just fix `decision` to `APPROVE`/`REJECT` a
 **`find_similar_cases`** ranks by real semantic similarity: a text embedding
 (title + description, model `nvidia/llama-nemotron-embed-1b-v2`, `embeddings.py`) is
 computed for each listing during `pipeline.run_fusion` and stored in Postgres via
-`pgvector` (`listing_embeddings` table); the tool queries nearest neighbors by cosine
-distance (`<=>`). Replaces the category+rule-overlap heuristic this project shipped
-first (`docs/decisions/0005`, superseded by `docs/decisions/0010`). A listing that
-hasn't been through the pipeline yet has no embedding and `find_similar_cases` raises
-rather than silently returning nothing.
+`pgvector` (`listing_embeddings` table, `embedding halfvec(2048)` with an HNSW index)
+via a scalar-subquery lookup of the target embedding, chosen because a self-join form
+was confirmed via real `EXPLAIN` to never use the index at all (`docs/decisions/0016`
+— also documents the half-precision trade-off). Replaces the category+rule-overlap
+heuristic this project shipped first (`docs/decisions/0005`, superseded by
+`docs/decisions/0010`). A listing that hasn't been through the pipeline yet has no
+embedding and `find_similar_cases` raises rather than silently returning nothing.
 
 ---
 
