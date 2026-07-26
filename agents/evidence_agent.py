@@ -42,12 +42,18 @@ def _load_image_b64(url: str) -> tuple[str, str]:
     return base64.b64encode(data).decode("ascii"), mime
 
 
-def _strip_fences(text: str) -> str:
+def _parse_json_object(text: str) -> dict:
+    """Extracts the first JSON object from the model's response. Tolerant of markdown
+    fences, including a stray duplicate closing fence the model occasionally emits
+    (confirmed via real calls -- a naive rsplit-based fence strip only removes one
+    trailing ``` and leaves the other as garbage that breaks json.loads). Uses
+    raw_decode to parse just the first JSON value and ignore anything after it,
+    rather than assuming the whole remaining string is clean JSON."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text
-        text = text.rsplit("```", 1)[0]
-    return text.strip()
+    obj, _ = json.JSONDecoder().raw_decode(text[text.index("{") :])
+    return obj
 
 
 def _extract_from_image(url: str) -> dict:
@@ -77,7 +83,7 @@ def _extract_from_image(url: str) -> dict:
     )
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
-    return json.loads(_strip_fences(content))
+    return _parse_json_object(content)
 
 
 def run_evidence_agent(canonical_doc: dict) -> dict:

@@ -46,35 +46,48 @@ def _verdict(content: list[dict]) -> tuple[bool, float]:
     raise ValueError(f"No true/false token found in {content}")
 
 
+def _post_for_verdict(json_body: dict) -> tuple[bool, float]:
+    """POSTs a chat completion request and parses a true/false verdict, retrying once
+    on failure. Confirmed via real calls: the model occasionally ignores the
+    single-word instruction and rambles instead ("Given the information provided...")
+    with no true/false token inside the token budget -- stochastic non-compliance, not
+    a bad prompt, so a retry (a fresh sample) resolves it far more often than not
+    without masking a genuine failure (still raises if both attempts fail)."""
+    last_error = None
+    for _attempt in range(2):
+        resp = requests.post(
+            NVIDIA_API_URL,
+            headers={
+                "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json=json_body,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        choice = resp.json()["choices"][0]
+        try:
+            return _verdict(choice["logprobs"]["content"])
+        except ValueError as e:
+            last_error = e
+    raise last_error
+
+
 def _text_check(prompt: str) -> tuple[bool, float]:
-    resp = requests.post(
-        NVIDIA_API_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
+    return _post_for_verdict(
+        {
             "model": TEXT_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 10,
             "logprobs": True,
             "top_logprobs": 1,
-        },
-        timeout=30,
+        }
     )
-    resp.raise_for_status()
-    choice = resp.json()["choices"][0]
-    return _verdict(choice["logprobs"]["content"])
 
 
 def _vision_check(prompt: str, image_url: str) -> tuple[bool, float]:
-    resp = requests.post(
-        NVIDIA_API_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
+    return _post_for_verdict(
+        {
             "model": VISION_MODEL,
             "messages": [
                 {
@@ -88,12 +101,8 @@ def _vision_check(prompt: str, image_url: str) -> tuple[bool, float]:
             "max_tokens": 10,
             "logprobs": True,
             "top_logprobs": 1,
-        },
-        timeout=30,
+        }
     )
-    resp.raise_for_status()
-    choice = resp.json()["choices"][0]
-    return _verdict(choice["logprobs"]["content"])
 
 
 def _aggregate_across_images(results: list[tuple[bool, float]]) -> tuple[bool, float]:

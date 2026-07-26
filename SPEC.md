@@ -209,11 +209,25 @@ answer (1 − confidence when the verdict was consistent, confidence itself when
 wasn't), so a run of confidently-consistent checks produces a score near 0 without
 that number being invented.
 
-Note: `description_vs_images` is measurably noisier than the other three on the demo's
-synthetic images, since those are text-only placeholders rather than real product
-photos — there's little for a vision model to visually confirm condition/warranty
-language against. Real product photography should make this check as reliable as the
-others.
+Note: `description_vs_images` is measurably noisier than the other three checks —
+tested (not assumed) whether real product photography would fix this, per
+`docs/decisions/0013`. Result was mixed, not a clean fix:
+
+- It did resolve a related, more serious problem: with the demo's original synthetic
+  images, Evidence Agent's brand detection was reliable, but real photos exposed a
+  false-positive risk (misreading incidental text near a logo as a fabricated brand)
+  that's now fixed by picking unambiguous photos and verified reliable (10/10 real
+  calls).
+- It did **not** reduce `description_vs_images` noise for the `clean` listing —
+  mean `inconsistencyScore` across 6 real-call samples went from 0.171 (old synthetic
+  placeholder) to ~0.395 (real photo), i.e. noisier, not less. The synthetic
+  placeholder's OCR-readable text let the vision model "match" by literally reading
+  text back, not by genuine visual reasoning; a real photo that shows only the bare
+  device (no screen, no box, nothing distinguishing "Pro Max 256GB" from any other
+  iPhone 16) is honestly harder to visually confirm against a specific title/spec
+  claim, not easier. Remains open — a photo with more distinguishing visual detail
+  (screen on, retail packaging with model/storage text) is the next thing to try, not
+  assumed to be the fix without testing it too.
 
 Written as a `ConsistencyAgent` artifact per §5.
 

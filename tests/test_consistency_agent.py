@@ -7,6 +7,8 @@ during development.
 import math
 from pathlib import Path
 
+import pytest
+
 from agents import consistency_agent
 from tests.conftest import FakeResponse
 
@@ -51,6 +53,52 @@ def test_contradiction_is_inconsistent(monkeypatch):
 
     checks = {c["pair"]: c["consistent"] for c in result["payload"]["checks"]}
     assert checks["title_vs_description"] is False
+
+
+def _prose_response() -> dict:
+    """Shape of a real response where the model ignored the single-word instruction
+    and rambled instead -- no true/false token anywhere in the (10-token-capped)
+    logprobs. Confirmed via real calls while testing real product photography
+    (docs/decisions/0013)."""
+    tokens = [
+        {"token": "Given", "logprob": -7.93},
+        {"token": " the", "logprob": -0.32},
+        {"token": " information", "logprob": -1.34},
+    ]
+    return {"choices": [{"message": {"content": "Given the information"}, "logprobs": {"content": tokens}}]}
+
+
+def test_retries_once_when_model_rambles_instead_of_answering(monkeypatch, canonical_clean):
+    """Regression test: a single rambling (non-compliant) response used to crash the
+    whole agent run. A retry (fresh sample) should recover when the second attempt
+    answers properly -- confirmed empirically that retrying resolves this most of the
+    time, since it's stochastic non-compliance, not a broken prompt."""
+    responses = [FakeResponse(_prose_response()), FakeResponse(_text_response("false", -0.0101))]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(consistency_agent.requests, "post", fake_post)
+    result = consistency_agent.run_consistency_agent(canonical_clean)
+
+    checks = {c["pair"]: c["consistent"] for c in result["payload"]["checks"]}
+    assert checks == {"title_vs_description": True}
+    assert call_count["n"] == 2
+
+
+def test_raises_after_two_consecutive_rambling_responses(monkeypatch, canonical_clean):
+    """Second consecutive failure must still raise -- not silently masked. SPEC.md §4:
+    an agent error routes the listing to PENDING_REVIEW rather than defaulting to
+    approve, so a genuine repeated failure must surface, not be swallowed."""
+    monkeypatch.setattr(
+        consistency_agent.requests, "post", lambda *a, **kw: FakeResponse(_prose_response())
+    )
+
+    with pytest.raises(ValueError):
+        consistency_agent.run_consistency_agent(canonical_clean)
 
 
 def test_multi_image_aggregates_as_any_confirms(monkeypatch):
