@@ -111,8 +111,9 @@ def test_brand_mismatch_and_copyright_category_dedupe_to_one_c001_match():
 
 def test_consistency_threshold_override_changes_routing():
     """Same inconsistencyScore as test_clean_listing_has_no_matches (0.1, below the
-    default 0.30 threshold), but a lowered override makes it match C004 -- proves the
-    override parameter actually drives behavior, not just that the default works."""
+    default 0.48 threshold, docs/decisions/0014), but a lowered override makes it
+    match C004 -- proves the override parameter actually drives behavior, not just
+    that the default works."""
     evidence = {"brandMismatch": False}
     consistency = {"inconsistencyScore": 0.1}
     safety = {"violations": [], "confidence": 0.0}

@@ -321,8 +321,13 @@ Deterministic — pure rule logic over the three upstream payloads, no model cal
 Implemented in `agents/policy_agent.py`. `autoReject` is `true` only for S001 — the
 hard-override lever reserved since the original spec (§4 step 1) for a rule that should
 bypass confidence-based routing entirely; every other rule leaves it `false`.
-`CONSISTENCY_THRESHOLD` (0.30) for C004 is a first pass from observed scores
-on the demo's synthetic data, not tuned against real traffic. Configurable via the
+`CONSISTENCY_THRESHOLD` (0.48) for C004 is tuned from real model-call data — 8 real
+Consistency Agent runs per demo scenario showed a clean gap between the one scenario
+that should trigger C004 (`inconsistent`, scores 0.505-0.712) and every scenario that
+shouldn't (0.089-0.461); see `docs/decisions/0014`. Fixes C004 rule accuracy (e.g. the
+`clean` scenario no longer falsely matches it) but does **not** on its own get `clean`
+to auto-approve — that's gated by the separate, stricter `AUTO_APPROVE_THRESHOLD` bar
+(§4), still an open question (`docs/decisions/0013`). Configurable via the
 `CONSISTENCY_THRESHOLD` env var (read once at process start) or a per-call override on
 `run_policy_agent` — see `docs/decisions/0008-env-var-thresholds.md`.
 
