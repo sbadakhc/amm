@@ -478,11 +478,16 @@ for that listing, in order — rather than a separate reasoning trace to maintai
 viewable pixels. `.claude/skills/inspect-listing/` (invoked as `/inspect-listing
 <listingId>` or proactively when a moderator asks to see a case) runs
 `scripts/inspect_listing.py`, which prints the listing's text + latest agent artifacts
-and fetches each image to a local temp file; Claude Code then reads each path with its
-own Read tool, rendering images inline one at a time, paced by the moderator. Not an
-external OS image viewer -- see `docs/decisions/0011-inspect-listing-inline-read-not-external-viewer.md`
-for why (WSL interop disabled, no display server on the dev host, and the inline
-approach is portable to any host regardless).
+and fetches each image to a local temp file, then shows images one of two ways, paced
+by the moderator: by default Claude Code reads each path with its own Read tool,
+rendering inline in the conversation; with `--serve`, the script instead starts a
+throwaway HTTP server on `127.0.0.1` and prints a browser URL per image (`--stop-server`
+tears it down) -- a real pop-up window/tab, reachable from a Windows browser under WSL2
+via automatic `localhostForwarding`, no interop or display server required either way.
+Not an external OS image viewer directly -- see
+`docs/decisions/0011-inspect-listing-inline-read-not-external-viewer.md` for why (WSL
+interop disabled, no display server on the dev host) and how both fallbacks were
+verified against a real Windows browser.
 
 **Moderator identity.** `moderatorId` is checked against a `moderators` table
 (`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,
