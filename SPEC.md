@@ -20,32 +20,47 @@ Stack: **Postgres** (storage), **Claude Code** (orchestration + CLI), **NVIDIA N
 
 ## 1. Architecture
 
-```
-Seller → submit listing → Postgres
-                              │
-                     triggers workflow (in-process)
-                              │
-                        Intake Agent
-                              │
-        ┌───────────────┬────┴────┬───────────────┐
-        ▼                ▼        ▼               ▼
-  Evidence Agent  Consistency Agent  Safety Agent    Policy Agent
-        └───────────────┴────┬────┴───────────────┘
-                              ▼
-                        Decision Agent
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-           APPROVE          REVIEW          REJECT
-                              │
-                    (REVIEW only) Human Queue → CLI
+```mermaid
+flowchart TD
+    Seller[Seller submits listing] --> DB[(Postgres)]
+    DB -->|PENDING_MODERATION| Poller[service.py poller]
+    Poller --> Intake[Intake Agent]
+
+    Intake --> Evidence[Evidence Agent]
+    Intake --> Consistency[Consistency Agent]
+    Intake --> Safety[Safety Agent]
+    Intake -.->|fans out alongside,<br/>doesn't feed Decision| Embed[Embedding<br/>find_similar_cases only]
+
+    Evidence --> Policy[Policy Agent]
+    Consistency --> Policy
+    Safety --> Policy
+
+    Policy --> Decision[Decision Agent]
+
+    Decision -->|high confidence,<br/>no rules matched| Approved[APPROVED]
+    Decision -->|critical rule,<br/>high confidence| Rejected[REJECTED]
+    Decision -->|otherwise| Review[PENDING_REVIEW]
+
+    Review --> Moderator{Moderator}
+    Moderator -->|approve| Approved
+    Moderator -->|reject| Rejected
+    Moderator -->|escalate, §8| Escalated[ESCALATED]
+
+    Escalated --> Senior{Senior reviewer}
+    Senior -->|approve| Approved
+    Senior -->|reject| Rejected
+
+    Rejected -.->|appeal relayed, §8.1| Appeal[APPEAL_REQUESTED]
+    Appeal -->|approve| Approved
+    Appeal -->|reject| Rejected
 ```
 
 Intake runs first (produces the canonical document). Evidence, Consistency, Safety, and
 Policy then run in parallel off that document — Consistency depends only on the canonical
 document too, not on Evidence's output, so it doesn't need to wait in line behind it.
 Decision Agent waits on all four. Single process, async fan-out/fan-in — no broker, no
-separate API service.
+separate API service. Escalation and appeal (§8) are moderator-only — the automated
+Decision Agent never produces `ESCALATED` or `APPEAL_REQUESTED`.
 
 ---
 
@@ -54,21 +69,29 @@ separate API service.
 Listings arrive in the DB with `status: "PENDING_MODERATION"` — that value is the
 workflow trigger, not a status the workflow assigns.
 
-```
-PENDING_MODERATION → PROCESSING →
-    APPROVED               (terminal, unless appealed -- see below)
-    REJECTED                (terminal, unless appealed -- see below)
-    PENDING_REVIEW →
-        APPROVED (by moderator)   (terminal, unless appealed)
-        REJECTED (by moderator)   (terminal, unless appealed)
-        ESCALATED (by moderator, §8.2/§8.4) →
-            APPROVED (by moderator)   (terminal, unless appealed)
-            REJECTED (by moderator)   (terminal, unless appealed)
-    FAILED (agent error) → PENDING_REVIEW   (never silent-approve on failure)
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_MODERATION
+    PENDING_MODERATION --> PROCESSING
 
-REJECTED → APPEAL_REQUESTED (by moderator, §8.2/§8.4, relaying an external appeal) →
-    APPROVED (appeal upheld -- overturns the rejection)   (terminal)
-    REJECTED (appeal denied -- original rejection stands)   (terminal)
+    PROCESSING --> APPROVED: high confidence, no rules matched
+    PROCESSING --> REJECTED: critical rule, high confidence
+    PROCESSING --> PENDING_REVIEW: otherwise
+    PROCESSING --> PENDING_REVIEW: agent error, FAILED -- never silent-approve
+
+    PENDING_REVIEW --> APPROVED: moderator approves
+    PENDING_REVIEW --> REJECTED: moderator rejects
+    PENDING_REVIEW --> ESCALATED: moderator escalates, §8.2/§8.4
+
+    ESCALATED --> APPROVED: senior reviewer approves
+    ESCALATED --> REJECTED: senior reviewer rejects
+
+    REJECTED --> APPEAL_REQUESTED: moderator relays an external appeal, §8.2/§8.4
+    APPEAL_REQUESTED --> APPROVED: appeal upheld
+    APPEAL_REQUESTED --> REJECTED: appeal denied
+
+    APPROVED --> [*]
+    REJECTED --> [*]
 ```
 
 `ESCALATED` and `APPEAL_REQUESTED` are both moderator-only -- the automated Decision
