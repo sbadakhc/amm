@@ -1,9 +1,10 @@
 """
 Synthetic listing generator for the Agentic Marketplace Moderator demo.
 
-Generates placeholder product images (with real, readable text/logos so OCR and
-vision models have something genuine to detect) and seeds Postgres with a mix of
-listings designed to exercise every branch of the pipeline:
+Generates listing images (real, appropriately-licensed product photos for the
+scenarios where that matters -- see fixtures/real_photos/ATTRIBUTION.md and
+docs/decisions/0013; synthetic text placeholders elsewhere) and seeds Postgres with a
+mix of listings designed to exercise every branch of the pipeline:
 
   1. clean            -> should Auto Approve
   2. weapon            -> Safety Agent violation, W001, Auto Reject
@@ -30,6 +31,11 @@ from PIL import Image, ImageDraw, ImageFont
 OUT_DIR = Path(__file__).parent / "images"
 OUT_DIR.mkdir(exist_ok=True)
 
+# Real, appropriately-licensed product photos (not CC0 -- see ATTRIBUTION.md) used for
+# the scenarios where real photography actually matters (docs/decisions/0013). Kept
+# separate from OUT_DIR since they're committed source fixtures, not generated output.
+REAL_PHOTOS_DIR = Path(__file__).parent / "fixtures" / "real_photos"
+
 # images[].url values use this local scheme as a stand-in for s3://.
 # Swap IMAGE_URL_PREFIX to "s3://your-bucket/" once real object storage is wired up.
 IMAGE_URL_PREFIX = f"file://{OUT_DIR}/"
@@ -52,6 +58,14 @@ def make_image(filename: str, lines: list[str]) -> str:
     return f"{IMAGE_URL_PREFIX}{filename}"
 
 
+def use_real_photo(filename: str, source_filename: str) -> str:
+    """Copies a real fixture photo (fixtures/real_photos/, see ATTRIBUTION.md there)
+    into OUT_DIR under the listing's naming convention and returns its 'url'."""
+    src = (REAL_PHOTOS_DIR / source_filename).read_bytes()
+    (OUT_DIR / filename).write_bytes(src)
+    return f"{IMAGE_URL_PREFIX}{filename}"
+
+
 def listing(
     scenario: str,
     title: str,
@@ -59,17 +73,25 @@ def listing(
     category_id: str,
     category_name: str,
     brand: str,
-    image_lines: list[list[str]],
+    image_lines: list[list[str]] | None = None,
+    real_photo: str | None = None,
     previous_violations: int = 0,
     price: float = 899.99,
     currency: str = "GBP",
 ) -> dict:
+    """Exactly one of `image_lines` (synthetic text placeholders, one image per
+    sublist) or `real_photo` (a filename in fixtures/real_photos/, single image) must
+    be given -- see docs/decisions/0013 for which scenarios use which and why."""
     listing_id = f"LST-{uuid.uuid4().hex[:6].upper()}"
     seller_id = f"SUP-{uuid.uuid4().hex[:4].upper()}"
-    images = [
-        {"id": f"img-{i+1}", "url": make_image(f"{listing_id}-{i+1}.png", lines)}
-        for i, lines in enumerate(image_lines)
-    ]
+    if real_photo:
+        ext = Path(real_photo).suffix
+        images = [{"id": "img-1", "url": use_real_photo(f"{listing_id}-1{ext}", real_photo)}]
+    else:
+        images = [
+            {"id": f"img-{i+1}", "url": make_image(f"{listing_id}-{i+1}.png", lines)}
+            for i, lines in enumerate(image_lines)
+        ]
     return {
         "listingId": listing_id,
         "seller": {
@@ -107,7 +129,7 @@ def build_listings() -> list[dict]:
             category_id="electronics.mobile",
             category_name="Mobile Phones",
             brand="Apple",
-            image_lines=[["APPLE", "iPhone 16 Pro Max", "256GB"]],
+            real_photo="iphone-16-back.jpg",
         ),
         listing(
             scenario="weapon",
@@ -140,16 +162,16 @@ def build_listings() -> list[dict]:
             category_id="electronics.mobile",
             category_name="Mobile Phones",
             brand="Apple",
-            image_lines=[["APPLE", "iPhone 16 Pro Max"]],
+            real_photo="iphone-16-back.jpg",
         ),
         listing(
             scenario="risky_seller",
-            title="Sony WH-1000XM5 Headphones",
-            description="Brand new, sealed retail box, genuine Sony product.",
+            title="Sony Wireless Headphones",
+            description="Brand new, genuine Sony product, over-ear design with foldable headband.",
             category_id="electronics.audio",
             category_name="Audio Equipment",
             brand="Sony",
-            image_lines=[["SONY", "WH-1000XM5", "Wireless Headphones"]],
+            real_photo="sony-headphones.jpg",
             previous_violations=3,
             price=279.99,
         ),
