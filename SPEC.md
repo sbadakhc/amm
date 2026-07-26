@@ -479,7 +479,12 @@ vector search in scope; revisit if case volume outgrows what the heuristic ranks
 ## 7. End-to-End Flow
 
 1. A listing exists in Postgres with `status: "PENDING_MODERATION"`.
-2. Workflow picks it up and triggers in-process.
+2. Workflow picks it up and triggers in-process -- concretely, `service.py`'s poller
+   loop, calling `pipeline.poll_and_process()` on an interval (default 5s) and
+   `db.sweep_stale_processing()` on a separate interval (default 60s) for stale
+   `PROCESSING` claims (§2.1). Run it with `python3 service.py`; `POLL_INTERVAL_SECONDS`
+   / `SWEEP_INTERVAL_SECONDS` / `SWEEP_TIMEOUT_MINUTES` / `POLL_BATCH_SIZE` configure it.
+   Stops cleanly on SIGINT/SIGTERM after finishing the in-flight cycle.
 3. Intake maps the row to the canonical document (§3.1).
 4. Evidence, Consistency, Safety, Policy run in parallel.
 5. Decision Agent applies thresholds → APPROVE / REJECT / REVIEW.
