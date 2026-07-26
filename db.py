@@ -198,26 +198,31 @@ def get_listing_embedding(listing_id: str) -> dict | None:
         if row is None:
             return None
         result = dict(row)
-        result["embedding"] = result["embedding"].to_list()  # pgvector.Vector -> list[float]
+        result["embedding"] = result["embedding"].to_list()  # pgvector.HalfVector -> list[float]
         return result
 
 
 def find_similar_by_embedding(listing_id: str, k: int = 5) -> list[dict]:
     """Nearest neighbors by cosine distance (pgvector's `<=>` operator, §6), excluding
     the listing itself. Returns full listing rows plus a `distance` column (lower =
-    more similar, range [0, 2] for cosine distance)."""
+    more similar, range [0, 2] for cosine distance).
+
+    The target embedding is looked up via a scalar subquery rather than a self-join
+    -- confirmed via real EXPLAIN (docs/decisions/0016) that a self-join form (`JOIN
+    listing_embeddings le2 ON ...`) never touches the HNSW index at all, regardless
+    of data volume, while this form lets the planner treat the ORDER BY as a proper
+    ANN search using the index."""
     with get_conn() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             """
-            SELECT l.*, (le2.embedding <=> le1.embedding) AS distance
-            FROM listing_embeddings le1
-            JOIN listing_embeddings le2 ON le2.listing_id != le1.listing_id
-            JOIN listings l ON l.listing_id = le2.listing_id
-            WHERE le1.listing_id = %s
+            SELECT l.*, (le.embedding <=> (SELECT embedding FROM listing_embeddings WHERE listing_id = %s)) AS distance
+            FROM listing_embeddings le
+            JOIN listings l ON l.listing_id = le.listing_id
+            WHERE le.listing_id != %s
             ORDER BY distance ASC
             LIMIT %s
             """,
-            (listing_id, k),
+            (listing_id, listing_id, k),
         )
         return [dict(r) for r in cur.fetchall()]
