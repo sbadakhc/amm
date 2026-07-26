@@ -53,7 +53,7 @@ from cli.tools import explain_case, get_listing  # noqa: E402
 from images import fetch_image_bytes  # noqa: E402
 
 SERVER_STATE_PATH = Path(tempfile.gettempdir()) / "amm-inspect-server.json"
-ALL_STATUSES = ["PENDING_MODERATION", "PROCESSING", "PENDING_REVIEW", "APPROVED", "REJECTED"]
+ALL_STATUSES = ["PENDING_MODERATION", "PROCESSING", "PENDING_REVIEW", "ESCALATED", "APPROVED", "REJECTED"]
 
 
 def print_listing_text(listing_id: str) -> None:
