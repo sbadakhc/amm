@@ -49,6 +49,11 @@ SAFETY_CATEGORY_TO_RULE = {
     "Fraud/Deception": "F001",
     "Criminal Planning/Confessions": "F001",
     "Illegal Activity": "F001",
+    # "Prize/Advance-Fee Scam" isn't from the safety-guard classifier's own taxonomy --
+    # it's a synthetic category Safety Agent emits from its own targeted second-opinion
+    # check (docs/decisions/0020), for a confirmed systematic blind spot (lottery/prize
+    # scams) that the safety-guard model itself never flags at all.
+    "Prize/Advance-Fee Scam": "F001",
     "Sexual (minor)": "S001",
 }
 

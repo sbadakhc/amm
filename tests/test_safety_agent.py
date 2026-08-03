@@ -30,6 +30,17 @@ def _response(content: str, verdict_token: str, verdict_logprob: float) -> dict:
     }
 
 
+def _prize_check_response(verdict: str, logprob: float) -> dict:
+    """Shape of the targeted true/false prize-scam check (docs/decisions/0020) --
+    plain-text completion with a logprobs token list, same as Consistency Agent's
+    text checks, not the safety-guard classifier's structured JSON content."""
+    return {"choices": [{"message": {"content": verdict}, "logprobs": {"content": [{"token": verdict, "logprob": logprob}]}}]}
+
+
+def _not_a_prize_scam() -> "FakeResponse":
+    return FakeResponse(_prize_check_response("false", math.log(0.95)))
+
+
 def test_unsafe_weapon_listing(fake_post, canonical_weapon):
     fake_post(
         safety_agent,
@@ -47,25 +58,54 @@ def test_unsafe_weapon_listing(fake_post, canonical_weapon):
     assert "Guns and Illegal Weapons" in artifact["payload"]["explanation"]
 
 
-def test_safe_listing_has_no_violations(fake_post, canonical_clean):
-    fake_post(safety_agent, _response('{"User Safety": "safe"} ', "safe", -0.0338))
+def test_safe_listing_has_no_violations(monkeypatch, canonical_clean):
+    responses = [FakeResponse(_response('{"User Safety": "safe"} ', "safe", -0.0338)), _not_a_prize_scam()]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
     artifact = safety_agent.run_safety_agent(canonical_clean)
 
     assert artifact["payload"]["violations"] == []
     assert artifact["payload"]["explanation"] == "No safety violations detected."
 
 
-def test_high_confidence_safe_does_not_retry(monkeypatch, canonical_clean):
-    """docs/decisions/0019: only a low-confidence safe verdict gets a retry -- a
-    confident safe result (the common case) must not cost a second API call."""
+def test_high_confidence_safe_does_not_retry_primary_classifier(monkeypatch, canonical_clean):
+    """docs/decisions/0019: only a low-confidence safe verdict gets a retry of the
+    *primary* classifier -- a confident safe result must not cost a second call to
+    that model. It still gets exactly one prize-scam check call (docs/decisions/0020),
+    hence 2 total, not 1."""
+    responses = [FakeResponse(_response('{"User Safety": "safe"} ', "safe", -0.0338)), _not_a_prize_scam()]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    safety_agent.run_safety_agent(canonical_clean)
+
+    assert call_count["n"] == 2
+
+
+def test_unsafe_listing_skips_prize_scam_check(monkeypatch, canonical_weapon):
+    """No reason to spend the extra call when the primary classifier already flagged
+    the listing unsafe for an unrelated reason."""
     call_count = {"n": 0}
 
     def fake_post(*a, **kw):
         call_count["n"] += 1
-        return FakeResponse(_response('{"User Safety": "safe"} ', "safe", -0.0338))
+        return FakeResponse(
+            _response('{"User Safety": "unsafe", "Safety Categories": "Guns and Illegal Weapons"} ', "unsafe", -0.0001926)
+        )
 
     monkeypatch.setattr(safety_agent.requests, "post", fake_post)
-    safety_agent.run_safety_agent(canonical_clean)
+    safety_agent.run_safety_agent(canonical_weapon)
 
     assert call_count["n"] == 1
 
@@ -73,10 +113,35 @@ def test_high_confidence_safe_does_not_retry(monkeypatch, canonical_clean):
 def test_low_confidence_safe_retries_and_keeps_higher_confidence_safe(monkeypatch, canonical_clean):
     """First call: safe but low confidence (below SAFE_RETRY_CONFIDENCE_THRESHOLD).
     Retry: safe with higher confidence -- the more decisive safe verdict wins, no
-    violation is invented."""
+    violation is invented. Then the prize-scam check runs (still safe overall), for 3
+    calls total."""
     responses = [
         FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.02))),
         FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.9))),
+        _not_a_prize_scam(),
+    ]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    artifact = safety_agent.run_safety_agent(canonical_clean)
+
+    assert call_count["n"] == 3
+    assert artifact["payload"]["violations"] == []
+    assert artifact["payload"]["confidence"] == 0.9
+
+
+def test_prize_advance_fee_scam_detected_when_primary_classifier_missed_it(monkeypatch, canonical_clean):
+    """docs/decisions/0020: the primary classifier has a confirmed systematic blind
+    spot for lottery/prize-advance-fee scams -- this is the case the targeted
+    second-opinion check exists to catch."""
+    responses = [
+        FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.87))),
+        FakeResponse(_prize_check_response("true", math.log(0.94))),
     ]
     call_count = {"n": 0}
 
@@ -89,8 +154,9 @@ def test_low_confidence_safe_retries_and_keeps_higher_confidence_safe(monkeypatc
     artifact = safety_agent.run_safety_agent(canonical_clean)
 
     assert call_count["n"] == 2
-    assert artifact["payload"]["violations"] == []
-    assert artifact["payload"]["confidence"] == 0.9
+    assert artifact["payload"]["violations"] == ["Prize/Advance-Fee Scam"]
+    assert artifact["payload"]["confidence"] == 0.94
+    assert "Prize/Advance-Fee Scam" in artifact["payload"]["explanation"]
 
 
 def test_low_confidence_safe_retry_catches_violation(monkeypatch, canonical_weapon):

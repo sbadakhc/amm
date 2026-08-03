@@ -307,8 +307,20 @@ only gives a low-trust safe verdict a second chance. Configurable via the
 **Known limitation, not fixed by this retry:** some fraud patterns (confirmed:
 lottery/advance-fee "you won a prize, pay a fee to claim it" scams) are a systematic
 model blind spot, not a sampling-variance one — the model confidently and consistently
-calls them safe regardless of retries, phrasing, or language. See `docs/decisions/0019`
-and issue #57.
+calls them safe regardless of retries, phrasing, or language. See `docs/decisions/0019`.
+
+A listing still `safe` after the retry above gets one more check: a targeted question
+to a general text model (`mistralai/mistral-nemotron`, same model and "ask one specific
+true/false question" pattern already used by Consistency Agent) asking whether the
+listing describes receiving something of value contingent on the recipient first
+sending money — the prize/advance-fee scam pattern the primary classifier can't see
+(`docs/decisions/0020`). Only runs when the primary classifier already said safe, to
+avoid the extra call on listings already flagged unsafe by something else. A `true`
+result adds a synthetic `Prize/Advance-Fee Scam` category — not from the safety-guard
+model's own taxonomy — mapped to F001 like the others. Confirmed via real calls: 13/15
+(~87%) recall across three real-call test variants repeated 5x each, up from 0/9 before
+this check existed — a large improvement, not a complete fix; still probabilistic, not
+guaranteed on every call.
 
 Full taxonomy confirmed empirically (`docs/decisions/0012`) — real calls to the real
 model with one prompt per suspected category, not a scraped model-card page.
@@ -323,8 +335,11 @@ categories (violence, hate speech, profanity, misinformation) not obviously
 actionable on a product listing; revisit if this pipeline's scope ever grows beyond
 listing text. `Criminal Planning/Confessions` and `Illegal Activity` are exceptions —
 not general chat-safety noise but a reliable fraud signal in Arabic-language listing
-text specifically (`docs/decisions/0018`), mapped to F001. `explanation` is generated
-deterministically from the category list, not model-written prose.
+text specifically (`docs/decisions/0018`), mapped to F001. `Prize/Advance-Fee Scam`
+(`docs/decisions/0020`) is not part of this taxonomy at all — it's synthetic, emitted
+by Safety Agent's own second-opinion check, not the safety-guard classifier.
+`explanation` is generated deterministically from the category list, not model-written
+prose.
 
 **Out**
 ```json
@@ -346,15 +361,15 @@ sets. Returns an **array** — a listing can match more than one rule.
 | C001 | Counterfeit goods prohibited | High | Evidence Agent `brandMismatch: true`, or Safety Agent `violations` contains `Copyright/Trademark/Plagiarism` |
 | C004 | Misleading product information | Medium | Consistency Agent `inconsistencyScore` above threshold |
 | D001 | Illegal drugs prohibited | Critical | Safety Agent `violations` contains `Controlled/Regulated Substances` |
-| F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception`, `Criminal Planning/Confessions`, or `Illegal Activity` |
+| F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception`, `Criminal Planning/Confessions`, `Illegal Activity`, or `Prize/Advance-Fee Scam` |
 | S001 | Sexual content involving minors prohibited | Critical, **autoReject** | Safety Agent `violations` contains `Sexual (minor)` |
 
 C001's two triggers are deduped to at most one match (the higher of the two
 confidences) — never two separate `C001` entries in `matches` even if both signals
 fire. The `Copyright/Trademark/Plagiarism` text signal was confirmed unreliable in
 testing (`docs/decisions/0012`) — treat it as a secondary signal, not a substitute for
-Evidence Agent's image-based `brandMismatch`. F001's three triggers dedupe the same
-way — at most one `F001` match even if more than one of the three categories fires.
+Evidence Agent's image-based `brandMismatch`. F001's four triggers dedupe the same
+way — at most one `F001` match even if more than one of the four categories fires.
 
 `Criminal Planning/Confessions` and `Illegal Activity` were originally left unmapped
 (`docs/decisions/0012`) as too broad to be their own signal. `docs/decisions/0018`
@@ -362,11 +377,11 @@ revised that after real-call testing against Arabic job-scam and real-estate-sca
 listing text found the opposite: the same scam intent that reliably surfaces as
 `Fraud/Deception` in English often surfaces as these two categories instead in Arabic,
 and neither produced false positives across a broader batch of clean/edgy-but-legal
-Arabic listings. Known limitation, not yet addressed: the underlying model is
-non-deterministic on identical input — the same scam text can produce different
-category sets across repeated calls, and some fraud patterns (e.g. lottery/advance-fee
-scams) can be missed outright in a single call. Tracked separately, not fixed by this
-mapping.
+Arabic listings. `docs/decisions/0019` (a retry on low-confidence safe verdicts) and
+this mapping together substantially closed the non-determinism gap for job/real-estate
+scams (confirmed 5/5 recall on repeat real calls). `Prize/Advance-Fee Scam` was added
+separately (`docs/decisions/0020`) for a systematic, not stochastic, blind spot the
+other three triggers never catch — see §3.4.
 
 Each match also carries a `confidence`, attributed from whichever upstream agent's signal
 triggered the rule — Policy Agent passes through that agent's number rather than
