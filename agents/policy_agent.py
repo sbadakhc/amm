@@ -33,10 +33,22 @@ RULES = {
 # specially below, not through this dict) rather than getting its own rule -- it's
 # the same underlying violation (counterfeit goods) as Evidence Agent's brandMismatch
 # signal, just detected from listing text instead of images.
+#
+# "Criminal Planning/Confessions" and "Illegal Activity" also map to F001
+# (docs/decisions/0018) -- revises 0012's original decision to leave them unmapped.
+# 0012 reasoned Criminal Planning/Confessions "fires alongside almost every other
+# violation, too broad to be its own signal"; real-call testing against Arabic
+# job-scam and real-estate-scam listing text found the opposite for fraud specifically
+# -- the same scam intent that surfaces as Fraud/Deception in English often surfaces as
+# these two categories instead in Arabic, and a broader batch of clean/edgy-but-legal
+# Arabic listings (weapons, drugs, vague investment talk, ordinary goods) produced zero
+# false positives on either category.
 SAFETY_CATEGORY_TO_RULE = {
     "Guns and Illegal Weapons": "W001",
     "Controlled/Regulated Substances": "D001",
     "Fraud/Deception": "F001",
+    "Criminal Planning/Confessions": "F001",
+    "Illegal Activity": "F001",
     "Sexual (minor)": "S001",
 }
 

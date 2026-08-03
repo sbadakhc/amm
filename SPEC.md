@@ -308,8 +308,10 @@ Categories observed: `Guns and Illegal Weapons`, `Controlled/Regulated Substance
 maps to a Policy Agent rule (§3.5) — most of the rest are general chat-safety
 categories (violence, hate speech, profanity, misinformation) not obviously
 actionable on a product listing; revisit if this pipeline's scope ever grows beyond
-listing text. `explanation` is generated deterministically from the category list,
-not model-written prose.
+listing text. `Criminal Planning/Confessions` and `Illegal Activity` are exceptions —
+not general chat-safety noise but a reliable fraud signal in Arabic-language listing
+text specifically (`docs/decisions/0018`), mapped to F001. `explanation` is generated
+deterministically from the category list, not model-written prose.
 
 **Out**
 ```json
@@ -331,14 +333,27 @@ sets. Returns an **array** — a listing can match more than one rule.
 | C001 | Counterfeit goods prohibited | High | Evidence Agent `brandMismatch: true`, or Safety Agent `violations` contains `Copyright/Trademark/Plagiarism` |
 | C004 | Misleading product information | Medium | Consistency Agent `inconsistencyScore` above threshold |
 | D001 | Illegal drugs prohibited | Critical | Safety Agent `violations` contains `Controlled/Regulated Substances` |
-| F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception` |
+| F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception`, `Criminal Planning/Confessions`, or `Illegal Activity` |
 | S001 | Sexual content involving minors prohibited | Critical, **autoReject** | Safety Agent `violations` contains `Sexual (minor)` |
 
 C001's two triggers are deduped to at most one match (the higher of the two
 confidences) — never two separate `C001` entries in `matches` even if both signals
 fire. The `Copyright/Trademark/Plagiarism` text signal was confirmed unreliable in
 testing (`docs/decisions/0012`) — treat it as a secondary signal, not a substitute for
-Evidence Agent's image-based `brandMismatch`.
+Evidence Agent's image-based `brandMismatch`. F001's three triggers dedupe the same
+way — at most one `F001` match even if more than one of the three categories fires.
+
+`Criminal Planning/Confessions` and `Illegal Activity` were originally left unmapped
+(`docs/decisions/0012`) as too broad to be their own signal. `docs/decisions/0018`
+revised that after real-call testing against Arabic job-scam and real-estate-scam
+listing text found the opposite: the same scam intent that reliably surfaces as
+`Fraud/Deception` in English often surfaces as these two categories instead in Arabic,
+and neither produced false positives across a broader batch of clean/edgy-but-legal
+Arabic listings. Known limitation, not yet addressed: the underlying model is
+non-deterministic on identical input — the same scam text can produce different
+category sets across repeated calls, and some fraud patterns (e.g. lottery/advance-fee
+scams) can be missed outright in a single call. Tracked separately, not fixed by this
+mapping.
 
 Each match also carries a `confidence`, attributed from whichever upstream agent's signal
 triggered the rule — Policy Agent passes through that agent's number rather than

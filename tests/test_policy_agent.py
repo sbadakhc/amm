@@ -71,6 +71,43 @@ def test_fraud_violation_maps_to_f001():
     assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.95}]
 
 
+def test_criminal_planning_violation_maps_to_f001():
+    """docs/decisions/0018: revises 0012's decision to leave this category unmapped --
+    real-call testing on Arabic scam listing text found it fires reliably on fraud
+    intent and not on unrelated content."""
+    safety = {"violations": ["Criminal Planning/Confessions"], "confidence": 0.98}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.98}]
+
+
+def test_illegal_activity_violation_maps_to_f001():
+    safety = {"violations": ["Illegal Activity"], "confidence": 0.97}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.97}]
+
+
+def test_criminal_planning_and_fraud_deception_dedupe_to_one_f001_match():
+    """Both categories mapping to F001 firing together must not produce two matches."""
+    safety = {"violations": ["Criminal Planning/Confessions", "Fraud/Deception"], "confidence": 0.99}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.99}]
+
+
 def test_sexual_minor_violation_maps_to_s001_autoreject():
     safety = {"violations": ["Sexual (minor)"], "confidence": 0.99}
     evidence = {"brandMismatch": False}
