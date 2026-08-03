@@ -1,6 +1,6 @@
-# amm — Agentic Marketplace Moderator
+# AMM - Agentic Marketplace Moderator
 
-A multi-agent moderation pipeline for marketplace listings. A seller submits a
+A multi-agent moderation circuit for marketplace listings. A seller submits a
 listing; a chain of agents evaluates it and routes it to **APPROVE**, **REJECT**,
 or **REVIEW** (human-in-the-loop). Moderators work the review queue through a
 conversational CLI driven by talking to Claude Code — no web UI, no separate
