@@ -16,6 +16,12 @@ import requests
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODEL = "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"
 
+# Second-opinion model for the prize/advance-fee scam check (docs/decisions/0020) --
+# same model and "ask one targeted true/false question" pattern already used by
+# Consistency Agent, not the safety-guard classifier itself.
+PRIZE_SCAM_CHECK_MODEL = "mistralai/mistral-nemotron"
+PRIZE_SCAM_CATEGORY = "Prize/Advance-Fee Scam"
+
 # A "safe" verdict below this confidence gets one retry (docs/decisions/0019).
 # Empirically every genuinely-safe real-call test case observed confidence >= 0.70;
 # the one confirmed false-safe result (a fraud listing misclassified safe) had
@@ -55,6 +61,51 @@ def _classify(text: str) -> dict:
     return {"unsafe": unsafe, "categories": categories, "confidence": confidence}
 
 
+def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float]:
+    """Targeted second-opinion check (docs/decisions/0020): the safety-guard
+    classifier has a confirmed systematic blind spot for prize/lottery/advance-fee
+    scams ("you won a prize, pay a fee to claim it") -- real-call testing found it
+    consistently and confidently classifies this pattern as safe regardless of
+    retries, phrasing, or language (docs/decisions/0019's retry only fixes stochastic
+    low-confidence misses, not this). A direct, narrowly-scoped question to a general
+    text model catches it far more reliably (5/5 vs. 3/5 for a keyword heuristic, on
+    the same real-call test corpus) because it reasons about intent rather than
+    matching phrasing. Retries once on a malformed (non-true/false) response, same
+    failure mode Consistency Agent's `_post_for_verdict` already handles."""
+    prompt = (
+        "Does this marketplace listing describe the recipient receiving something of "
+        "value (a prize, lottery winnings, an inheritance, a free item) that is "
+        "contingent on the recipient first sending money, a fee, or payment details? "
+        "Answer with exactly one word: true or false.\n"
+        f"Listing text: {text}"
+    )
+    last_error = None
+    for _attempt in range(2):
+        resp = requests.post(
+            NVIDIA_API_URL,
+            headers={
+                "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": PRIZE_SCAM_CHECK_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 10,
+                "logprobs": True,
+                "top_logprobs": 1,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["logprobs"]["content"]
+        for tok in content:
+            word = tok["token"].strip().strip("▁").lower()
+            if word in ("true", "false"):
+                return word == "true", math.exp(tok["logprob"])
+        last_error = ValueError(f"No true/false token found in {content}")
+    raise last_error
+
+
 def run_safety_agent(canonical_doc: dict) -> dict:
     """
     Runs the Safety Agent over a canonical listing document (§3.1) and returns a
@@ -67,6 +118,12 @@ def run_safety_agent(canonical_doc: dict) -> dict:
     than not. If the retry also comes back safe, the higher-confidence of the two safe
     verdicts wins -- retrying never *invents* a violation, it only gives a low-trust
     safe verdict a second chance to be corrected.
+
+    A listing that's still "safe" after that gets one more check: a targeted
+    prize/advance-fee scam question (docs/decisions/0020), since this is a confirmed
+    systematic (not stochastic) blind spot the retry above doesn't fix. Only runs when
+    the primary classifier already said safe -- no reason to spend the extra call on a
+    listing already flagged unsafe by something else.
     """
     text = f"{canonical_doc['title']}\n{canonical_doc['description']}"
     result = _classify(text)
@@ -75,14 +132,24 @@ def run_safety_agent(canonical_doc: dict) -> dict:
         if retry["unsafe"] or retry["confidence"] > result["confidence"]:
             result = retry
 
-    if result["unsafe"]:
-        explanation = f"Content flagged as unsafe: {', '.join(result['categories'])}."
+    violations = list(result["categories"]) if result["unsafe"] else []
+    confidence = result["confidence"]
+
+    if not result["unsafe"]:
+        is_prize_scam, prize_conf = _check_prize_advance_fee_scam(text)
+        if is_prize_scam:
+            violations = [PRIZE_SCAM_CATEGORY]
+            confidence = prize_conf
+
+    unsafe = bool(violations)
+    if unsafe:
+        explanation = f"Content flagged as unsafe: {', '.join(violations)}."
     else:
         explanation = "No safety violations detected."
 
     payload = {
-        "violations": result["categories"] if result["unsafe"] else [],
-        "confidence": round(result["confidence"], 4),
+        "violations": violations,
+        "confidence": round(confidence, 4),
         "explanation": explanation,
     }
 

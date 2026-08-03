@@ -85,6 +85,19 @@ def test_criminal_planning_violation_maps_to_f001():
     assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.98}]
 
 
+def test_prize_advance_fee_scam_violation_maps_to_f001():
+    """docs/decisions/0020: Safety Agent's own synthetic category for its targeted
+    prize/advance-fee scam check, not from the safety-guard classifier's taxonomy."""
+    safety = {"violations": ["Prize/Advance-Fee Scam"], "confidence": 0.94}
+    evidence = {"brandMismatch": False}
+    consistency = {"inconsistencyScore": 0.05}
+
+    result = run_policy_agent(_canonical(), evidence, consistency, safety)
+    matches = result["payload"]["matches"]
+
+    assert matches == [{"rule": "F001", "severity": "High", "autoReject": False, "confidence": 0.94}]
+
+
 def test_illegal_activity_violation_maps_to_f001():
     safety = {"violations": ["Illegal Activity"], "confidence": 0.97}
     evidence = {"brandMismatch": False}
