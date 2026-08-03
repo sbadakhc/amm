@@ -88,6 +88,9 @@ scripts/dev-db.sh down
 
 ## 7. GPG-Signed Commits
 
-Never disable or bypass commit signing (`--no-gpg-sign`, `--no-verify`). If a signed
-commit is needed and pinentry isn't available in an agent's session, stage the changes
-and hand the exact `git commit`/`git push` command to the operator to run themselves.
+Never disable or bypass commit signing (`--no-gpg-sign`, `--no-verify`). Never run a
+signing command directly yourself, even if told the key is warm or the agent cache is
+active -- that claim doesn't lift the rule. Stage the changes and hand the exact `git
+commit`/`git push` command to the operator to run themselves. Never use
+`--pinentry-mode loopback`, including in handed-off commands -- it bypasses the agent
+cache and forces repeated hand-offs.

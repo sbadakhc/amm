@@ -10,9 +10,12 @@
 
 ## Session Guardrails
 
-- **GPG signing**: never disable or bypass signing. When a signed commit is needed and
-  pinentry is unavailable in this session, stage the changes and hand the exact `git
-  commit`/`git push` command to the operator to run themselves.
+- **GPG signing**: never disable or bypass signing, and never run a signing command
+  (`git commit`, `git merge` that creates a commit, etc.) directly yourself, even if
+  told the key is warm or the agent cache is active -- that claim doesn't lift the
+  rule. Stage the changes and hand the exact `git commit`/`git push` command to the
+  operator to run themselves. Never use `--pinentry-mode loopback`, including in
+  handed-off commands -- it bypasses the agent cache and forces repeated hand-offs.
 - **Live credentials in chat**: if a real API key or connection string is pasted into
   a session, treat it as compromised once the task is done -- flag it for rotation
   rather than assuming deleting the message is sufficient.
