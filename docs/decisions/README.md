@@ -22,3 +22,4 @@ covered by SPEC.md.
 | [0008](0008-env-var-thresholds.md) | Decision/Policy thresholds: env vars, not a DB config table |
 | [0009](0009-moderator-auth-registry.md) | Moderator identity: known-registry authorization, not authentication |
 | [0010](0010-embeddings-for-find-similar-cases.md) | find_similar_cases: real embeddings via pgvector, superseding the heuristic |
+| [0018](0018-map-criminal-planning-illegal-activity-to-f001.md) | Map Criminal Planning/Confessions and Illegal Activity to F001, revising 0012 |
