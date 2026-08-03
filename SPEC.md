@@ -297,6 +297,19 @@ verdict with no category, and Policy Agent needs a category to pick a rule). Cla
 (`logprobs: true` on the chat completion), not a separately requested score. `violations`
 is the model's raw `Safety Categories` string, split on `,`.
 
+A `safe` verdict below `SAFE_RETRY_CONFIDENCE_THRESHOLD` (default 0.5) gets one retry
+(`docs/decisions/0019`) — confirmed via real calls that the model occasionally emits a
+well-formed but wrong `safe` verdict at near-zero confidence on genuinely fraudulent
+text, and a fresh sample resolves it more often than not. If the retry also comes back
+safe, the higher-confidence of the two wins; retrying never invents a violation, it
+only gives a low-trust safe verdict a second chance. Configurable via the
+`SAFETY_SAFE_RETRY_THRESHOLD` env var, same pattern as `docs/decisions/0008`.
+**Known limitation, not fixed by this retry:** some fraud patterns (confirmed:
+lottery/advance-fee "you won a prize, pay a fee to claim it" scams) are a systematic
+model blind spot, not a sampling-variance one — the model confidently and consistently
+calls them safe regardless of retries, phrasing, or language. See `docs/decisions/0019`
+and issue #57.
+
 Full taxonomy confirmed empirically (`docs/decisions/0012`) — real calls to the real
 model with one prompt per suspected category, not a scraped model-card page.
 Categories observed: `Guns and Illegal Weapons`, `Controlled/Regulated Substances`,

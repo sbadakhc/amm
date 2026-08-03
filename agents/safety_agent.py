@@ -16,6 +16,13 @@ import requests
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODEL = "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"
 
+# A "safe" verdict below this confidence gets one retry (docs/decisions/0019).
+# Empirically every genuinely-safe real-call test case observed confidence >= 0.70;
+# the one confirmed false-safe result (a fraud listing misclassified safe) had
+# confidence 0.023 -- a wide gap, same threshold-tuning pattern as
+# CONSISTENCY_THRESHOLD (docs/decisions/0014). Configurable per docs/decisions/0008.
+SAFE_RETRY_CONFIDENCE_THRESHOLD = float(os.environ.get("SAFETY_SAFE_RETRY_THRESHOLD", "0.5"))
+
 
 def _classify(text: str) -> dict:
     """Calls the safety-guard model. Returns {"unsafe", "categories", "confidence"}."""
@@ -52,9 +59,21 @@ def run_safety_agent(canonical_doc: dict) -> dict:
     """
     Runs the Safety Agent over a canonical listing document (§3.1) and returns a
     SafetyAgent artifact (§5) ready to append to the `artifacts` table.
+
+    A low-confidence "safe" verdict gets one retry (docs/decisions/0019) -- confirmed
+    via real calls that the model occasionally emits "safe" with near-zero confidence
+    on genuinely fraudulent text (a well-formed but wrong answer, unlike Consistency
+    Agent's rambling-response failure mode); a fresh sample resolves this more often
+    than not. If the retry also comes back safe, the higher-confidence of the two safe
+    verdicts wins -- retrying never *invents* a violation, it only gives a low-trust
+    safe verdict a second chance to be corrected.
     """
     text = f"{canonical_doc['title']}\n{canonical_doc['description']}"
     result = _classify(text)
+    if not result["unsafe"] and result["confidence"] < SAFE_RETRY_CONFIDENCE_THRESHOLD:
+        retry = _classify(text)
+        if retry["unsafe"] or retry["confidence"] > result["confidence"]:
+            result = retry
 
     if result["unsafe"]:
         explanation = f"Content flagged as unsafe: {', '.join(result['categories'])}."
