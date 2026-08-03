@@ -351,9 +351,12 @@ Implemented in `agents/safety_agent.py`.
 
 ### 3.5 Policy Agent
 Maps evidence/safety/consistency findings to policy rules, keyed off `categoryId` (e.g.
-`electronics.mobile`). Rule sets are looked up per category rather than one global
-policy — a listing under `electronics.*` and one under `finance.*` check different rule
-sets. Returns an **array** — a listing can match more than one rule.
+`electronics.mobile`). Rule sets are looked up per category prefix
+(`RULE_SETS_BY_CATEGORY_PREFIX` in `agents/policy_agent.py`), designed to let different
+category trees (e.g. `electronics.*` vs. `finance.*`) apply different rule sets — but
+today only the catch-all `"*"` entry exists, so every category currently gets the same
+6 rules. No category has needed narrowing yet; add a prefix key when one does. Returns
+an **array** — a listing can match more than one rule.
 
 | Rule ID | Description | Severity | Triggered by |
 |---|---|---|---|

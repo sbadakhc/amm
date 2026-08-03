@@ -10,10 +10,11 @@ explicitly with:
 Corpus scope, per docs/decisions/0021: one true-positive (fraud) and one true-negative
 (clean) listing per representative alsoug.com category, plus the fraud archetypes
 confirmed during issues #54/#55/#57's investigation (advance-fee, prize/lottery,
-pay-before-pickup, fake escrow, phishing link, pet-shipping scam) and a handful of
-deliberately tricky negatives (legit raffle, business award, currency exchange) that
-stress precision, not just recall. Not exhaustive -- real strengthening of this corpus
-is expected to come from pilot review-queue data, not further synthetic expansion.
+pay-before-pickup, fake escrow, phishing link, pet-shipping scam, guaranteed-return
+investment pitch) and a handful of deliberately tricky negatives (legit raffle,
+business award, currency exchange) that stress precision, not just recall. Not
+exhaustive -- real strengthening of this corpus is expected to come from pilot
+review-queue data, not further synthetic expansion.
 
 Thresholds are aggregate, not per-case: individual real-call outcomes are inherently
 probabilistic (confirmed empirically -- #57's targeted check caught 13/15, not 15/15,
@@ -89,6 +90,14 @@ TRUE_POSITIVES = {
         "You have been selected to win a cash prize of $10,000. To claim your "
         "prize, please pay a $100 shipping fee via bank transfer.",
     ),
+    # Guaranteed-return investment pitch -- unrealistic profit promise ("double your
+    # money in a week") is itself a classic scam pattern, not just vague marketing.
+    # Originally filed as a true-negative during initial corpus design; re-labeled
+    # after review, see docs/decisions/0021.
+    "vague_investment_pitch": (
+        "فرصة استثمارية سريعة الربح",
+        "استثمر أموالك معنا واحصل على أرباح مضاعفة خلال أسبوع، فرصة محدودة.",
+    ),
 }
 
 TRUE_NEGATIVES = {
@@ -108,7 +117,6 @@ TRUE_NEGATIVES = {
     "legit_raffle_disclosed": ("اشترك في السحب الشهري بشراء تذكرة", "اشترك في السحب الشهري بشراء تذكرة بـ 10 جنيه، السحب مباشر وموثق، الفائز يعلن على صفحتنا."),
     "business_award_brag": ("فخورون بفوزنا بجائزة أفضل متجر", "فخورون بفوزنا بجائزة أفضل متجر إلكترونيات لعام 2025 في السودان."),
     "currency_exchange_legit": ("صرافة عملات بسعر تنافسي", "نوفر خدمة صرافة دولار ويورو وريال بأفضل سعر في السوق، تواصل واتساب."),
-    "vague_investment_pitch": ("فرصة استثمارية سريعة الربح", "استثمر أموالك معنا واحصل على أرباح مضاعفة خلال أسبوع، فرصة محدودة."),
 }
 
 
