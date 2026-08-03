@@ -79,6 +79,12 @@ scripts/dev-db.sh up      # starts the container, applies schema.sql
 scripts/dev-db.sh down
 ```
 
+Real-call fraud-detection eval (`docs/decisions/0021`) -- checked-in corpus, opt-in
+only, real API cost/time, not part of the normal test run or CI:
+```bash
+AMM_RUN_FRAUD_EVAL=1 pytest tests/test_fraud_eval.py -v -s
+```
+
 ## 6. Definition of Done
 
 - [ ] Tested against a real model call and/or real Postgres instance, not just a mock
