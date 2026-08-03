@@ -3,7 +3,9 @@ Shared pytest fixtures. The offline suite mocks `requests.post` with real record
 response shapes captured from live NVIDIA API calls during development (see
 docs/decisions/ for context) -- not invented schemas. Integration tests that need a
 real Postgres instance are marked `@pytest.mark.integration` and skipped unless
-DATABASE_URL is set (see scripts/dev-db.sh to stand one up).
+DATABASE_URL is set (see scripts/dev-db.sh to stand one up). Tests marked
+`@pytest.mark.fraud_eval` hit the live NVIDIA API for real and are skipped unless
+AMM_RUN_FRAUD_EVAL is set (see docs/decisions/0021 and tests/test_fraud_eval.py).
 """
 
 import os
@@ -66,9 +68,10 @@ def canonical_weapon():
 
 
 def pytest_collection_modifyitems(config, items):
-    if os.environ.get("DATABASE_URL"):
-        return
     skip_integration = pytest.mark.skip(reason="DATABASE_URL not set -- see scripts/dev-db.sh")
+    skip_fraud_eval = pytest.mark.skip(reason="opt-in only -- set AMM_RUN_FRAUD_EVAL=1 (see docs/decisions/0021)")
     for item in items:
-        if "integration" in item.keywords:
+        if "integration" in item.keywords and not os.environ.get("DATABASE_URL"):
             item.add_marker(skip_integration)
+        if "fraud_eval" in item.keywords and not os.environ.get("AMM_RUN_FRAUD_EVAL"):
+            item.add_marker(skip_fraud_eval)
