@@ -3,7 +3,7 @@
 A multi-agent moderation circuit for marketplace listings. A seller submits a
 listing; a chain of agents evaluates it and routes it to **APPROVE**, **REJECT**,
 or **REVIEW** (human-in-the-loop). Moderators work the review queue through a
-conversational CLI driven by talking to Claude Code — no web UI, no separate
+conversational CLI driven by talking to Claude Code. No web UI, no separate
 chat service.
 
 For architecture, agent contracts, routing rules, and the full CLI tool
