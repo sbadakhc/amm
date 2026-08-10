@@ -15,7 +15,7 @@ from the original spec, see [docs/decisions/](docs/decisions/).
 - [Claude Code](https://claude.com/claude-code), installed and authenticated
 - Python 3.11+
 - Docker (for the throwaway local Postgres)
-- An NVIDIA API key — get one at [build.nvidia.com](https://build.nvidia.com)
+- An NVIDIA API key. Get one at [build.nvidia.com](https://build.nvidia.com)
 
 ## Install
 
