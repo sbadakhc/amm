@@ -352,3 +352,28 @@ def test_reinstate_seller_rejects_already_active(seeded_listing_with_own_seller,
 
     with pytest.raises(ValueError, match="Can only reinstate a SUSPENDED seller"):
         tools.reinstate_seller(seller_id, "reason", active_moderator)
+
+
+def test_rerun_analysis_decision_agent_reads_real_db_rows(seeded_listing):
+    """Regression test: `db.latest_artifact` returns raw Postgres rows (snake_case
+    `produced_at`, a real `datetime`) -- `run_decision_agent` expects the same
+    camelCase-`producedAt`-string shape `run_*_agent()` functions return, to build
+    `basedOn` (§5). Calling `rerun_analysis(listingId, agent='DecisionAgent')`
+    against real upstream artifacts used to crash with `KeyError: 'producedAt'`."""
+    for agent_name, payload in [
+        ("EvidenceAgent", {"brandMismatch": False, "brandsDetected": ["Apple"]}),
+        ("ConsistencyAgent", {"inconsistencyScore": 0.1, "checks": [], "checksSkipped": []}),
+        ("SafetyAgent", {"violations": [], "confidence": 0.98, "explanation": "No safety violations detected."}),
+        ("PolicyAgent", {"matches": []}),
+    ]:
+        db.insert_artifact(
+            {"listingId": seeded_listing, "agent": agent_name, "version": "test-v1", "payload": payload}
+        )
+
+    decision = tools.rerun_analysis(seeded_listing, agent="DecisionAgent")
+
+    assert decision["agent"] == "DecisionAgent"
+    assert len(decision["basedOn"]) == 4
+    assert all(ref.count("@") == 1 for ref in decision["basedOn"])
+    row = db.get_listing_row(seeded_listing)
+    assert row["status"] in ("APPROVED", "REJECTED", "PENDING_REVIEW")
