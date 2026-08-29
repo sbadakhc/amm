@@ -272,6 +272,17 @@ def reinstate_seller(seller_id: str, reason: str, moderator_id: str | None = Non
     return db.get_seller(seller_id)
 
 
+def _with_produced_at(artifact_row: dict) -> dict:
+    """`db.latest_artifact` returns a raw Postgres row -- snake_case `produced_at`
+    (a `datetime`), matching schema.sql's column name. `run_decision_agent` expects
+    the same shape `run_*_agent()` functions return -- camelCase `producedAt` (an ISO
+    string) -- to build `basedOn` references (§5). Bridges that gap for
+    `rerun_analysis`'s DecisionAgent path, the one caller that needs it; every other
+    `db.latest_artifact` caller in this codebase (record_decision, inspect_listing.py)
+    only reads `produced_at`/`payload` directly and doesn't need this."""
+    return {**artifact_row, "producedAt": artifact_row["produced_at"].isoformat()}
+
+
 def rerun_analysis(listing_id: str, agent: str | None = None) -> dict:
     """`rerun_analysis(listingId, agent?)` (§6). Appends new artifact(s) rather than
     overwriting (§5) — safe to call on a terminal listing, e.g. after a model upgrade.
@@ -298,10 +309,10 @@ def rerun_analysis(listing_id: str, agent: str | None = None) -> dict:
         return db.insert_artifact(artifact)
 
     if agent == "DecisionAgent":
-        evidence = db.latest_artifact(listing_id, "EvidenceAgent")
-        consistency = db.latest_artifact(listing_id, "ConsistencyAgent")
-        safety = db.latest_artifact(listing_id, "SafetyAgent")
-        policy = db.latest_artifact(listing_id, "PolicyAgent")
+        evidence = _with_produced_at(db.latest_artifact(listing_id, "EvidenceAgent"))
+        consistency = _with_produced_at(db.latest_artifact(listing_id, "ConsistencyAgent"))
+        safety = _with_produced_at(db.latest_artifact(listing_id, "SafetyAgent"))
+        policy = _with_produced_at(db.latest_artifact(listing_id, "PolicyAgent"))
         decision = run_decision_agent(canonical_doc, evidence, consistency, safety, policy)
         db.insert_artifact(decision)
         db.update_listing_status(listing_id, DECISION_TO_STATUS[decision["payload"]["decision"]])

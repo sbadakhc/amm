@@ -43,3 +43,4 @@ covered by SPEC.md.
 | [0029](0029-evidence-agent-timeout-fallback.md) | Evidence Agent extraction fails open on timeout, not blocking -- skipped images excluded from brandMismatch, not counted either way |
 | [0030](0030-title-vs-description-heuristic-backstop.md) | Heuristic backstop for title_vs_description when the model check is skipped -- narrow brand-name matching only, never overrides a real model verdict |
 | [0031](0031-rename-moderator-cli-skills.md) | Rename moderator-facing skills for brevity -- inspect/stats/status/run, with pushback on two proposed names that collided or misled |
+| [0032](0032-rerun-analysis-decision-agent-produced-at-bug.md) | Fix rerun_analysis(agent="DecisionAgent") KeyError -- DB row shape vs. agent-output shape mismatch, zero prior test coverage |
