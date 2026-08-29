@@ -26,13 +26,15 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in `NVIDIA_API_KEY` in `.env`. `DATABASE_URL` is set for you in the next step.
+Fill in `NVIDIA_API_KEY` in `.env`. `DATABASE_URL` and `MODERATOR_ID` are already set
+for you by `.env.example` (matching `scripts/dev-db.sh`'s throwaway container and the
+`mod-1` demo moderator) -- override either if you're pointing at a different Postgres
+instance or want to act as a different moderator by default.
 
 ## Configure & seed data
 
 ```bash
 scripts/dev-db.sh up              # starts a throwaway Postgres, applies schema.sql
-export DATABASE_URL="postgresql://amm:amm@127.0.0.1:55432/moderator"
 python3 generate_synthetic_data.py # seeds 5 demo listings + 3 demo moderators
 ```
 
@@ -46,14 +48,21 @@ and Claude Code calls them for you, or invoke them directly.
 |---|---|
 | `/status` | Confirms every NVIDIA model the pipeline depends on is actually callable right now -- run this first |
 | `/run` | Claims whatever's `PENDING_MODERATION` and runs it through the pipeline |
-| `/inspect --queue` | Table view of the whole review queue -- status, decision, confidence, policy rules, image links |
+| `/inspect --queue` | Table view of the whole review queue -- status, decision, confidence, policy rules, image links (flags any image that couldn't be fetched rather than failing the whole table) |
 | `/inspect <listingId>` | Deep-dive one case -- full text, every agent's findings, and its images |
 | `/stats` | Pipeline accuracy/performance report -- decision distribution, moderator override rate, latency, failures |
 
 Recording a decision isn't a slash command -- just say what you want ("approve it",
 "reject it, counterfeit confirmed", "escalate this one") and Claude Code calls the
 matching tool (`approve_listing`, `reject_listing`, `escalate_case`, `request_appeal`,
-`resolve_appeal`).
+`resolve_appeal`), defaulting to `MODERATOR_ID` from `.env` when you don't name one.
+
+Two more skills exist for maintaining the repo itself, not for working the queue:
+
+| Command | What it does |
+|---|---|
+| `/housekeeping` | Repo health check -- git hygiene, secrets, test suite, SPEC.md drift. Run at session start or before a PR |
+| `/add-agent <name>` | Scaffolds a new pipeline agent (Evidence/Consistency/Safety/Policy/Decision-style) following this project's verify-then-implement pattern |
 
 For continuous processing instead of one-shot `/run` batches:
 
@@ -185,6 +194,7 @@ APPROVED | LST-E857CA
 - avg confidence: 0.83
 
 ## Human review
+- listings with a moderator APPROVE/REJECT verdict on an automated APPROVE/REJECT (override-comparable): 0
 - outcomes for automated-REVIEW listings:
   - APPROVE: 1
   - REJECT: 1
@@ -259,10 +269,28 @@ See SPEC.md §6 for the complete tool table and §8 for escalation/appeals, and
 `docs/decisions/0011`/`0015` for why images render this way (inline Read vs.
 `--serve`, and the queue-table view) rather than an external image viewer.
 
+## Development workflow
+
+- `main` is stable -- no direct commits, no force-push. `dev` is the integration
+  branch. Feature branches come off `dev`; PRs target `dev`, and `dev` gets promoted
+  into `main` as its own separate merge commit once work is ready to ship (not a
+  fast-forward -- see `git log` for the "Promote dev into main" commits).
+- Two slash commands drive that cycle instead of improvising each time:
+  `/commit-pr` (stage, conventional-commit, push, open the PR) and `/finish-pr`
+  (verify the merge, sync `dev`, delete the branch) -- see `.claude/commands/`.
+- Commits are GPG-signed. Claude Code will stage changes and hand you the exact
+  `git commit`/`git push` command to run yourself rather than attempting a signing
+  prompt itself.
+- `.claude/rules/security.md` covers untrusted input and secrets handling;
+  `.claude/rules/style.md` covers prose style (no em dashes -- use `--`).
+- Full contributor details (safe-to-edit areas, the "verify against a real model
+  call and real Postgres" testing discipline, definition of done) live in
+  [AGENTS.md](AGENTS.md).
+
 ## Tests
 
 ```bash
-pytest -v
+pytest -v          # add --cov for coverage (pytest-cov, requirements-dev.txt)
 ```
 
 Offline tests always run. Integration tests need `DATABASE_URL` set (from
