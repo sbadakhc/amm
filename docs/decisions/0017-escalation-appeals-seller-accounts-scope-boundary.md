@@ -70,10 +70,10 @@ Split what gets built now from what's deferred, along a logic/storage boundary:
 - The friction points noted above (case locking, SLA visibility, batch actions) are
   real but separate from this ADR's scope -- they affect the existing single-listing
   flow regardless of seller-account work, and can be picked up independently.
-- `.claude/skills/inspect-listing/SKILL.md` will need extending once escalation
-  tiers/appeal states/seller entities exist (e.g. `--queue` gaining an escalation-tier
-  or appeal-status column, a seller-level view) -- flagged in the skill's Notes
-  section now as a forward reference, not built yet.
+- `.claude/skills/inspect/SKILL.md` (renamed from `inspect-listing`, `docs/decisions/0031`)
+  will need extending once escalation tiers/appeal states/seller entities exist (e.g.
+  `--queue` gaining an escalation-tier or appeal-status column, a seller-level view)
+  -- flagged in the skill's Notes section now as a forward reference, not built yet.
 
 ## Update: first piece implemented
 

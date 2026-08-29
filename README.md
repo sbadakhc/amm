@@ -39,8 +39,8 @@ python3 generate_synthetic_data.py # seeds 5 demo listings + 3 demo moderators
 ## Run
 
 ```
-/preflight       # confirms every model the pipeline needs is actually callable right now
-/process-queue   # claims whatever's PENDING_MODERATION and runs it through the pipeline
+/status   # confirms every model the pipeline needs is actually callable right now
+/run      # claims whatever's PENDING_MODERATION and runs it through the pipeline
 ```
 
 Or as a long-running service instead of one-shot batches:
@@ -63,7 +63,7 @@ run `generate_synthetic_data.py`), but the shape of it won't.
 
 ```
 $ claude
-> /preflight
+> /status
 ```
 ```
 STATUS      MODEL                                        USED BY
@@ -82,7 +82,7 @@ rather than blocking the whole listing. Proceed.
 **2. Process the overnight batch**
 
 ```
-> /process-queue
+> /run
 ```
 ```
 5
@@ -95,7 +95,7 @@ cleanly, nothing crashed or hung.
 **3. See what needs a human**
 
 ```
-> /inspect-listing --queue
+> /inspect --queue
 ```
 ```
 | Listing | Title | Status | Decision | Confidence | Policy Rules | Images |
@@ -136,7 +136,7 @@ before the others.
 No Apple branding anywhere on the packaging despite a declared Apple brand — genuine
 signal, not a glitch. (`checksSkipped` shows the flaky model from step 1 dropped one
 check on this exact listing; the other checks still caught it independently.) The
-seller name — visible via `/inspect-listing LST-2C61FB` — is literally "Counterfeit
+seller name — visible via `/inspect LST-2C61FB` — is literally "Counterfeit
 Brand Trading Co." Easy call.
 
 **5. Record the decisions**
@@ -157,7 +157,7 @@ APPROVED | LST-E857CA
 **6. Check how the morning went**
 
 ```
-> /pipeline-stats
+> /stats
 ```
 ```
 # Pipeline stats (all-time)
@@ -209,7 +209,7 @@ Claude Code will call these for you, or invoke them directly.
 **1. See what needs review**
 
 ```
-/inspect-listing --queue
+/inspect --queue
 ```
 Prints one markdown table — listing ID, title, status, decision, confidence,
 matched policy rules, and an image link per row — across the whole queue (add
@@ -219,7 +219,7 @@ matched policy rules, and an image link per row — across the whole queue (add
 **2. Eyeball a specific case**
 
 ```
-/inspect-listing <listingId>
+/inspect <listingId>
 ```
 Prints the listing's text and every agent's findings, then shows its images
 inline in the conversation (Claude Code reads each one directly — no browser

@@ -22,6 +22,13 @@ covered by SPEC.md.
 | [0008](0008-env-var-thresholds.md) | Decision/Policy thresholds: env vars, not a DB config table |
 | [0009](0009-moderator-auth-registry.md) | Moderator identity: known-registry authorization, not authentication |
 | [0010](0010-embeddings-for-find-similar-cases.md) | find_similar_cases: real embeddings via pgvector, superseding the heuristic |
+| [0011](0011-inspect-listing-inline-read-not-external-viewer.md) | Show a case's images via Claude's Read tool (inline) or a throwaway HTTP server (`--serve`), no external OS viewer |
+| [0012](0012-safety-taxonomy-confirmed-new-rules.md) | Confirmed Safety Agent taxonomy via real calls; added F001 (fraud) and S001 (minors, autoReject), extended C001 |
+| [0013](0013-real-product-photography.md) | Real product photography for demo listings -- fixed a brand-detection false-positive risk, description_vs_images noise remains open |
+| [0014](0014-consistency-threshold-tuned-from-real-data.md) | CONSISTENCY_THRESHOLD tuned from real model-call data, 0.30 -> 0.48 |
+| [0015](0015-inspect-listing-queue-table.md) | inspect-listing gains a `--queue` table view, one shared image server instead of restarting per listing |
+| [0016](0016-listing-embeddings-hnsw-index.md) | HNSW index on listing_embeddings via halfvec, not plain vector (pgvector's 2000-dim cap) |
+| [0017](0017-escalation-appeals-seller-accounts-scope-boundary.md) | Escalation/appeals/seller accounts: portable rules logic built now, real backend integration deferred |
 | [0018](0018-map-criminal-planning-illegal-activity-to-f001.md) | Map Criminal Planning/Confessions and Illegal Activity to F001, revising 0012 |
 | [0019](0019-safety-agent-low-confidence-retry.md) | Safety Agent retries a low-confidence safe verdict once |
 | [0020](0020-prize-advance-fee-scam-targeted-check.md) | Targeted second-opinion check for prize/advance-fee scams |
@@ -34,3 +41,5 @@ covered by SPEC.md.
 | [0027](0027-pipeline-stats.md) | Pipeline accuracy/performance stats from the existing artifact log -- decision distribution, moderator override rate, latency, failures |
 | [0028](0028-consistency-agent-timeout-fallback.md) | Consistency Agent checks fail open on timeout, not blocking -- skipped checks excluded from inconsistencyScore, not counted either way |
 | [0029](0029-evidence-agent-timeout-fallback.md) | Evidence Agent extraction fails open on timeout, not blocking -- skipped images excluded from brandMismatch, not counted either way |
+| [0030](0030-title-vs-description-heuristic-backstop.md) | Heuristic backstop for title_vs_description when the model check is skipped -- narrow brand-name matching only, never overrides a real model verdict |
+| [0031](0031-rename-moderator-cli-skills.md) | Rename moderator-facing skills for brevity -- inspect/stats/status/run, with pushback on two proposed names that collided or misled |

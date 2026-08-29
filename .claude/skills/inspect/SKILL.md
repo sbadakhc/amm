@@ -1,5 +1,5 @@
 ---
-name: inspect-listing
+name: inspect
 description: >
   Lets a human moderator actually see listing images and read full text/agent
   findings during review, instead of just getting raw s3:// URLs back from
@@ -8,7 +8,7 @@ description: >
   wants to look at a case or survey the queue -- triggers on "inspect listing", "show
   me listing", "show images for", "let me see the images for", "view listing", "open
   case", "what's pending", "show me the queue", "give me a table of listings", or
-  invoked directly as /inspect-listing [listingId].
+  invoked directly as /inspect [listingId].
 argument-hint: "[listingId | --queue]"
 compatibility: Claude Code
 metadata:
@@ -16,7 +16,7 @@ metadata:
   version: "1.0"
 ---
 
-# Skill: inspect-listing
+# Skill: inspect
 
 ## Purpose
 
@@ -66,9 +66,12 @@ they've picked a specific case from the table.
 1. Resolve the `listingId`. If not given, ask, or offer `list_pending()` (via
    `cli/tools.py`) to let the moderator pick from the review queue -- or point them at
    `--queue` above if they want to survey rather than pick blind.
-2. Ask (or infer from how they phrased the request) whether the moderator wants images
-   inline in the conversation or opened in a browser. Default to inline if unclear --
-   it's the lower-friction path and needs no follow-up action from them.
+2. "Show me," "open it," "let me see," "look at" -- any phrasing that means "put this
+   in front of me" -- all mean inline, every time (confirmed live: a moderator
+   corrected `--serve` being used for "open it" with "when I say show the listing I
+   need to see it" -- a link to click isn't showing them anything). Use `--serve`
+   only when the moderator explicitly asks for a browser tab/window, or says
+   something that can't mean anything else ("open it in my browser").
 3. Run `python3 scripts/inspect_listing.py <listingId>`, adding `--serve` for the
    browser path. This prints:
    - The listing's title, description, category, seller, and status.
