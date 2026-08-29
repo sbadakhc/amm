@@ -122,6 +122,11 @@ def test_find_similar_cases_without_embedding_raises(seeded_listing):
         tools.find_similar_cases(seeded_listing)
 
 
+def test_find_similar_cases_unknown_listing_raises():
+    with pytest.raises(ValueError, match="No such listing"):
+        tools.find_similar_cases("LST-DOES-NOT-EXIST")
+
+
 def test_find_similar_cases_ranks_by_embedding_distance(seeded_listing):
     other_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
     with db.get_conn() as conn:
@@ -239,6 +244,11 @@ def test_escalated_case_resolves_via_existing_approve_reject_tools(seeded_listin
     assert result["status"] == "REJECTED"
 
 
+def test_escalate_case_unknown_listing_raises(active_moderator):
+    with pytest.raises(ValueError, match="No such listing"):
+        tools.escalate_case("LST-DOES-NOT-EXIST", "reason", active_moderator)
+
+
 def test_escalate_case_does_not_touch_seller_violation_count(seeded_listing_with_own_seller, active_moderator):
     listing_id, seller_id = seeded_listing_with_own_seller
 
@@ -255,6 +265,11 @@ def test_request_appeal_moves_rejected_to_appeal_requested(seeded_listing_with_o
     result = tools.request_appeal(listing_id, "Seller disputes classification.", active_moderator)
 
     assert result["status"] == "APPEAL_REQUESTED"
+
+
+def test_request_appeal_unknown_listing_raises(active_moderator):
+    with pytest.raises(ValueError, match="No such listing"):
+        tools.request_appeal("LST-DOES-NOT-EXIST", "reason", active_moderator)
 
 
 def test_request_appeal_rejects_non_rejected_listing(seeded_listing, active_moderator):
@@ -285,6 +300,11 @@ def test_resolve_appeal_approved_overturns_rejection(seeded_listing, active_mode
     result = tools.resolve_appeal(seeded_listing, "APPROVE", "Proof accepted, overturning.", active_moderator)
 
     assert result["status"] == "APPROVED"
+
+
+def test_resolve_appeal_unknown_listing_raises(active_moderator):
+    with pytest.raises(ValueError, match="No such listing"):
+        tools.resolve_appeal("LST-DOES-NOT-EXIST", "APPROVE", "reason", active_moderator)
 
 
 def test_resolve_appeal_rejects_non_appeal_requested_listing(seeded_listing, active_moderator):
@@ -352,6 +372,11 @@ def test_reinstate_seller_rejects_already_active(seeded_listing_with_own_seller,
 
     with pytest.raises(ValueError, match="Can only reinstate a SUSPENDED seller"):
         tools.reinstate_seller(seller_id, "reason", active_moderator)
+
+
+def test_reinstate_seller_rejects_unknown_seller(active_moderator):
+    with pytest.raises(ValueError, match="No such seller"):
+        tools.reinstate_seller("SUP-DOES-NOT-EXIST", "reason", active_moderator)
 
 
 def test_rerun_analysis_decision_agent_reads_real_db_rows(seeded_listing):

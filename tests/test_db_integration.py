@@ -100,6 +100,83 @@ def test_update_listing_status(seeded_listing):
     assert row["status"] == "APPROVED"
 
 
+@pytest.fixture
+def two_listings_distinct_categories():
+    """Unique, randomly-suffixed category ids so filter assertions can't be polluted
+    by other real/demo listings that might already be sitting in a shared dev DB."""
+    suffix = uuid.uuid4().hex[:6]
+    category_a = f"test.category.a.{suffix}"
+    category_b = f"test.category.b.{suffix}"
+    ids = []
+
+    def _insert(category_id):
+        listing_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
+        with db.get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO listings
+                    (listing_id, seller, title, description, category, price, quantity,
+                     condition, brand, model, sku, images, attributes, shipping, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    listing_id,
+                    json.dumps({"sellerId": "SUP-TEST", "verified": True, "previousViolations": 0}),
+                    "Test Listing",
+                    "A test listing.",
+                    json.dumps({"id": category_id, "name": "Test Category"}),
+                    json.dumps({"amount": 1.0, "currency": "GBP"}),
+                    1,
+                    "new",
+                    "Apple",
+                    "Test",
+                    "SKU-TEST",
+                    json.dumps([]),
+                    json.dumps({}),
+                    json.dumps({}),
+                    "PENDING_REVIEW",
+                ),
+            )
+            conn.commit()
+        ids.append(listing_id)
+        return listing_id
+
+    listing_a1 = _insert(category_a)
+    listing_a2 = _insert(category_a)
+    listing_b = _insert(category_b)
+
+    yield {
+        "category_a": category_a,
+        "listing_a1": listing_a1,
+        "listing_a2": listing_a2,
+        "listing_b": listing_b,
+    }
+
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        for listing_id in ids:
+            cur.execute("DELETE FROM listings WHERE listing_id = %s", (listing_id,))
+        conn.commit()
+
+
+def test_list_listings_by_status_filters_by_category(two_listings_distinct_categories):
+    fx = two_listings_distinct_categories
+    results = db.list_listings_by_status("PENDING_REVIEW", category_id=fx["category_a"])
+    result_ids = {r["listing_id"] for r in results}
+    assert result_ids == {fx["listing_a1"], fx["listing_a2"]}
+    assert fx["listing_b"] not in result_ids
+
+
+def test_list_listings_by_status_applies_limit(two_listings_distinct_categories):
+    fx = two_listings_distinct_categories
+    unlimited = db.list_listings_by_status("PENDING_REVIEW", category_id=fx["category_a"])
+    assert len(unlimited) == 2
+
+    limited = db.list_listings_by_status("PENDING_REVIEW", category_id=fx["category_a"], limit=1)
+    assert len(limited) == 1
+
+
 def test_sweep_stale_processing_resets_old_rows(seeded_listing):
     db.claim_pending(batch_size=50)
     with db.get_conn() as conn:
