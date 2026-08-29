@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Inspection helper for the moderator CLI's inspect-listing skill (see SPEC.md §6,
-.claude/skills/inspect-listing/). Not itself a CLI tool per SPEC.md's tool table --
+Inspection helper for the moderator CLI's inspect skill (see SPEC.md §6,
+.claude/skills/inspect/ -- renamed from inspect-listing, docs/decisions/0031). Not
+itself a CLI tool per SPEC.md's tool table --
 a one-shot script Claude Code shells out to on a moderator's behalf.
 
 Prints the full canonical listing plus its latest agent artifacts/decision as text,

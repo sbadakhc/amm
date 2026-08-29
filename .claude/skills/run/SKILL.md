@@ -1,12 +1,12 @@
 ---
-name: process-queue
+name: run
 description: >
   Runs the automated moderation pipeline against whatever's PENDING_MODERATION in
   Postgres right now -- the "overnight batch just arrived" step. Wraps
   pipeline.poll_and_process() so it reads as a normal action, not a Python
   one-liner. Triggers on "process the queue", "run the pipeline", "process new
   listings", "run moderation", "check for new listings", or invoked directly as
-  /process-queue.
+  /run. Not to be confused with /inspect --queue, which only *views* the queue.
 argument-hint: (no arguments)
 compatibility: Claude Code
 metadata:
@@ -14,7 +14,7 @@ metadata:
   version: "1.0"
 ---
 
-# Skill: process-queue
+# Skill: run
 
 ## Purpose
 
@@ -26,8 +26,11 @@ than a normal command -- this skill exists so a moderator never has to type or r
 that.
 
 This does not review anything itself -- it's the automated half of the pipeline.
-Results land in `PENDING_REVIEW`/`APPROVED`/`REJECTED`; use `/inspect-listing` next to
-actually look at what happened.
+Results land in `PENDING_REVIEW`/`APPROVED`/`REJECTED`; use `/inspect` next to
+actually look at what happened. Don't confuse this with `/inspect --queue`, which
+only *views* the queue -- this skill *processes* it (docs/decisions/0031, renamed
+from `process-queue` specifically to reduce that confusion, though the two names are
+still adjacent enough to double-check which one's meant if a request is ambiguous).
 
 ## Steps
 
@@ -36,14 +39,14 @@ actually look at what happened.
    in `.env` -- see README.md's "Configure & seed data" for the dev-db connection
    string).
 2. Optionally, if it hasn't been checked recently in this session, suggest running
-   `/preflight` first -- not mandatory (most agents fail open on a down model
-   anyway), just a useful heads-up before a real batch run.
+   `/status` first -- not mandatory (most agents fail open on a down model anyway),
+   just a useful heads-up before a real batch run.
 3. Run `python3 -c "from pipeline import poll_and_process; print(poll_and_process())"`.
    The printed number is how many listings were claimed and processed in this batch
    (not necessarily how many succeeded cleanly -- some may have landed in
    `PENDING_REVIEW` via a Pipeline error artifact if an agent call failed).
-4. Report the count plainly, and point at `/inspect-listing --queue` as the natural
-   next step to see what actually happened to them.
+4. Report the count plainly, and point at `/inspect --queue` as the natural next
+   step to see what actually happened to them.
 5. If the command errors outright (not just a printed failure count -- an actual
    traceback that aborts before printing a number), that's a real problem worth
    surfacing directly, not retrying silently.
