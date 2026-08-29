@@ -774,7 +774,9 @@ status; the two convenience wrappers just fix `decision` to `APPROVE`/`REJECT` a
 `moderator` from `moderatorId`.
 
 **`find_similar_cases`** ranks by real semantic similarity: a text embedding
-(title + description, model `nvidia/llama-nemotron-embed-1b-v2`, `embeddings.py`) is
+(title + description, model `nvidia/nemotron-3-embed-1b` — originally
+`nvidia/llama-nemotron-embed-1b-v2`, NVIDIA removed that model from its catalog,
+`docs/decisions/0025`/`0026` — `embeddings.py`) is
 computed for each listing during `pipeline.run_fusion` and stored in Postgres via
 `pgvector` (`listing_embeddings` table, `embedding halfvec(2048)` with an HNSW index)
 via a scalar-subquery lookup of the target embedding, chosen because a self-join form
