@@ -62,6 +62,12 @@ commit/issue/PR body). See `.claude/rules/security.md`.
 pip install -r requirements.txt
 cp .env.example .env   # fill in DATABASE_URL and NVIDIA_API_KEY
 
+# ALWAYS run this first -- before real-call tests, a pipeline run, or a demo. Confirms
+# every NVIDIA-hosted model this project depends on is actually callable right now.
+# GONE means permanently removed (needs a code fix, see docs/decisions/0025/0026);
+# UNREACHABLE means down/flaky right now (may just need a retry later).
+python3 scripts/preflight_check.py
+
 python3 generate_synthetic_data.py   # seeds listings.json + images/, and Postgres if DATABASE_URL is set
 
 # run one agent standalone against a canonical doc:
@@ -83,6 +89,14 @@ Real-call fraud-detection eval (`docs/decisions/0021`) -- checked-in corpus, opt
 only, real API cost/time, not part of the normal test run or CI:
 ```bash
 AMM_RUN_FRAUD_EVAL=1 pytest tests/test_fraud_eval.py -v -s
+```
+
+Real-call false-positive eval against real eBay listing titles (`docs/decisions/0023`)
+-- opt-in, real API cost/time, and the fixture itself is local-only/never committed
+(source dataset is CC BY-NC 4.0, project has commercial intent):
+```bash
+python3 scripts/fetch_ebay_titles_fixture.py   # writes tests/fixtures/ebay_titles.local.tsv, gitignored
+AMM_RUN_EBAY_FP_EVAL=1 pytest tests/test_ebay_false_positive_eval.py -v -s
 ```
 
 ## 6. Definition of Done

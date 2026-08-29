@@ -210,8 +210,9 @@ without needing a dedicated "risk agent" to compute it.
 Facts only, no judgment. OCR, image understanding, brand/object detection, and
 document-level extraction (certificate numbers, serial numbers, expiry dates, country of
 origin where visible on packaging/labels) via vision-language model
-`nvidia/nemotron-nano-12b-v2-vl`, one call per image, results merged across all of a
-listing's images. Compares detected brand(s) against the canonical document's
+`meta/llama-3.2-11b-vision-instruct` (originally `nvidia/nemotron-nano-12b-v2-vl`,
+NVIDIA end-of-lifed that model 2026-08-26 — `docs/decisions/0025`), one call per image,
+results merged across all of a listing's images. Compares detected brand(s) against the canonical document's
 `declaredBrand` and flags a mismatch if they disagree — that's the input the Policy
 Agent needs to catch counterfeit listings. **No brand detected on any image at all also
 counts as a mismatch** when a brand is declared — an undeclared logo and a genuinely
@@ -220,14 +221,27 @@ counterfeit-branding signal C001 needs; it is not required that a *different* br
 detected. Exception: `declaredBrand` values of `generic`, `unbranded`, `no brand`,
 `none`, or `n/a` (case-insensitive) aren't a brand claim at all, so they never trigger a
 mismatch — otherwise every legitimately unbranded/commodity listing would falsely match
-C001. Written as an `EvidenceAgent` artifact per §5 (this is its `payload`):
+C001.
+
+**Fails open per-image on a hung/unresponsive backend (`docs/decisions/0029`):**
+extraction for each image independently uses its own timeout
+(`EVIDENCE_EXTRACTION_TIMEOUT`, default 20s, down from an old 60s) and retries once on
+a malformed (non-JSON) response before skipping that image (added to `imagesSkipped`)
+rather than crashing the whole listing — one image's extraction failing doesn't affect
+the others. If *every* attempted image was skipped, `brandMismatch` stays `false`
+regardless of `declaredBrand`, deliberately different from the zero-images-at-all case
+above: "couldn't check" (an infrastructure failure) must not manufacture the same
+signal as "checked and found nothing" (a real content signal). Partial failure (some
+images succeed, some skip) still uses whatever brands the successful images found.
+
+Written as an `EvidenceAgent` artifact per §5 (this is its `payload`):
 
 **Out**
 ```json
 { "objects": ["smartphone", "retail box"], "brandsDetected": ["Apple"],
   "ocr": ["Apple", "iPhone", "256GB"], "brandMismatch": false,
   "certificateNumbers": [], "serialNumbers": [], "expiryDate": null,
-  "countryOfOrigin": "China" }
+  "countryOfOrigin": "China", "imagesSkipped": [] }
 ```
 
 Implemented in `agents/evidence_agent.py`. Images are fetched via the shared
@@ -243,8 +257,9 @@ rather than reusing Evidence Agent's output — required by §1: Consistency dep
 on the canonical document, not on Evidence's output.
 
 Each check is one true/false model call (text model `mistralai/mistral-nemotron` for
-title↔description, vision model `nvidia/nemotron-nano-12b-v2-vl` for the three
-image-based checks); with more than one image, a check is `consistent` if *any* image
+title↔description, vision model `meta/llama-3.2-11b-vision-instruct` — see §3.2's note
+on the vision model swap, `docs/decisions/0025` — for the three image-based checks);
+with more than one image, a check is `consistent` if *any* image
 confirms it. `inconsistencyScore` is not a separate judgment call — it's the mean, over
 all checks, of the probability mass the model itself placed on the "inconsistent"
 answer (1 − confidence when the verdict was consistent, confidence itself when it
@@ -271,6 +286,20 @@ tested (not assumed) whether real product photography would fix this, per
   (screen on, retail packaging with model/storage text) is the next thing to try, not
   assumed to be the fix without testing it too.
 
+**Fails open per-check on a hung/unresponsive backend (`docs/decisions/0028`):**
+`mistral-nemotron` has been confirmed to accept a connection and request but never
+respond at all, no error, no timeout of its own (same finding as `0022`, which fixed
+Safety Agent's analogous case). Each of the four checks above uses its own short
+timeout (`CONSISTENCY_CHECK_TIMEOUT`, default 10s) rather than the old shared 30s, and
+independently skips (lands in `checksSkipped`, not `checks`) on a timeout, connection
+failure, or two malformed responses in a row — the other checks are unaffected. A
+skipped check contributes nothing to `inconsistencyScore` (excluded from the mean
+entirely, not counted as consistent or inconsistent); if every check was skipped,
+`inconsistencyScore` defaults to `0.0` rather than raising on an empty mean. Known,
+stated trade-off: a total outage makes this agent read as "fully consistent" to
+Decision Agent's fusion math (§4), even though `checksSkipped` records what actually
+happened — Decision Agent doesn't currently look at `checksSkipped`, only the score.
+
 Written as a `ConsistencyAgent` artifact per §5.
 
 **Out**
@@ -281,6 +310,7 @@ Written as a `ConsistencyAgent` artifact per §5.
     { "pair": "images_vs_declaredBrand", "consistent": true },
     { "pair": "category_vs_detectedObjects", "consistent": true }
   ],
+  "checksSkipped": [],
   "inconsistencyScore": 0.02 }
 ```
 
@@ -297,17 +327,25 @@ verdict with no category, and Policy Agent needs a category to pick a rule). Cla
 (`logprobs: true` on the chat completion), not a separately requested score. `violations`
 is the model's raw `Safety Categories` string, split on `,`.
 
-A `safe` verdict below `SAFE_RETRY_CONFIDENCE_THRESHOLD` (default 0.5) gets one retry
-(`docs/decisions/0019`) — confirmed via real calls that the model occasionally emits a
-well-formed but wrong `safe` verdict at near-zero confidence on genuinely fraudulent
-text, and a fresh sample resolves it more often than not. If the retry also comes back
-safe, the higher-confidence of the two wins; retrying never invents a violation, it
-only gives a low-trust safe verdict a second chance. Configurable via the
-`SAFETY_SAFE_RETRY_THRESHOLD` env var, same pattern as `docs/decisions/0008`.
-**Known limitation, not fixed by this retry:** some fraud patterns (confirmed:
-lottery/advance-fee "you won a prize, pay a fee to claim it" scams) are a systematic
-model blind spot, not a sampling-variance one — the model confidently and consistently
-calls them safe regardless of retries, phrasing, or language. See `docs/decisions/0019`.
+A verdict below `SAFE_RETRY_CONFIDENCE_THRESHOLD` (default 0.5) gets one retry
+(`docs/decisions/0019`, extended by `0024`) — confirmed via real calls that the model
+occasionally emits a well-formed but wrong verdict at near-zero confidence, in either
+direction: `safe` on genuinely fraudulent text (0019), or `unsafe` with spurious
+categories on genuinely clean text (0024, found via `docs/decisions/0023`'s eBay
+false-positive eval — a real clothing listing was flagged `Criminal
+Planning/Confessions` + `PII/Privacy` at confidence 0.0086). The two directions
+resolve asymmetrically on purpose: a low-confidence `safe` prefers the retry if it
+comes back unsafe at all, or more confidently safe (biases toward catching missed
+fraud, never invents a violation from a safe-then-safe pair); a low-confidence
+`unsafe` has no such bias — whichever of the two calls was more confident wins (the
+"prefer unsafe" bias would make this retry pointless, since the first call is already
+unsafe). Configurable via the `SAFETY_SAFE_RETRY_THRESHOLD` env var, same pattern as
+`docs/decisions/0008`.
+**Known limitation, not fixed by either retry direction:** some fraud patterns
+(confirmed: lottery/advance-fee "you won a prize, pay a fee to claim it" scams) are a
+systematic model blind spot, not a sampling-variance one — the model confidently and
+consistently calls them safe regardless of retries, phrasing, or language. See
+`docs/decisions/0019` and the targeted check below (`0020`).
 
 A listing still `safe` after the retry above gets one more check: a targeted question
 to a general text model (`mistralai/mistral-nemotron`, same model and "ask one specific
@@ -321,6 +359,17 @@ model's own taxonomy — mapped to F001 like the others. Confirmed via real call
 (~87%) recall across three real-call test variants repeated 5x each, up from 0/9 before
 this check existed — a large improvement, not a complete fix; still probabilistic, not
 guaranteed on every call.
+
+**Fails open on a hung/unresponsive backend (`docs/decisions/0022`):** real-call
+testing found `mistral-nemotron`'s endpoint intermittently accepts the connection and
+request but never sends a response — no error, no timeout of its own. This check uses
+its own short timeout (`PRIZE_SCAM_CHECK_TIMEOUT`, default 10s — real-call latency is
+normally under 2s) rather than the primary classifier's 30s, and treats a timeout,
+connection failure, or two malformed responses in a row as "skip" rather than raising:
+the primary classifier's verdict stands unchanged, and a `logger.warning` records the
+skip. During an outage, this specific check's recall reverts to the pre-0020 blind
+spot for its duration — accepted as one signal among several (Policy Agent's other
+F001 triggers, human review) rather than the sole fraud defense.
 
 Full taxonomy confirmed empirically (`docs/decisions/0012`) — real calls to the real
 model with one prompt per suspected category, not a scraped model-card page.
@@ -644,6 +693,7 @@ through some other channel, it isn't triggered by the seller directly.
 | `rerun_analysis(listingId, agent?)` | — | new agent output |
 | `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
 | `whoami(moderatorId?)` | — | moderator's own registry entry |
+| `get_stats(since?)` | `{ since?: ISO timestamp }` | accuracy/performance report (§6's stats note below, docs/decisions/0027) |
 
 Planned additions (escalation/appeals/seller accounts, not yet implemented) are
 tracked separately in §8.4 rather than this table, since they depend on state-machine
@@ -683,6 +733,23 @@ validated against the table, an unset/unknown/inactive default is still rejected
 without needing to pass it on every call. `whoami()` returns the resolved moderator's
 own registry row, letting a moderator confirm their identity/active status before
 acting. See `docs/decisions/0009-moderator-auth-registry.md`.
+
+**Accuracy/performance stats.** `get_stats(since?)` (`db.get_stats`,
+`scripts/pipeline_stats.py` for a markdown report) aggregates the artifact log into:
+listing volume by status, automated decision distribution + avg confidence, a
+moderator override rate (automated APPROVE/REJECT vs. a later differing moderator
+verdict on the same listing -- `REVIEW`-routed outcomes are reported separately, not
+folded in, since `REVIEW` isn't a verdict to disagree with), avg Safety Agent
+confidence and Consistency Agent inconsistency score, avg end-to-end pipeline
+latency, pipeline failures grouped by error, and policy rule hit counts. No new
+schema -- everything derives from fields `DecisionAgent` artifacts already carry
+(`version = 'fusion-v1'` for automated, `payload.moderator` for human-issued).
+**Measures consistency between the pipeline and moderators, not correctness against
+ground truth** -- there's no labeled outcome data flowing into this system, so this
+is the closest available accuracy proxy, not a precision/recall number; see
+`docs/decisions/0027` for the full reasoning and `docs/decisions/0021`/`0023` for the
+real-call eval harnesses that test against corpora with actually-known outcomes
+instead.
 
 `approve_listing`/`reject_listing` are thin wrappers over `record_decision` — all three
 append a new `DecisionAgent` artifact and move the listing to the matching terminal
