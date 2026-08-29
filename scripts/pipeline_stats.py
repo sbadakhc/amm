@@ -48,7 +48,10 @@ def render(stats: dict) -> str:
     lines.append("")
 
     lines.append("## Human review")
-    lines.append(f"- listings with a recorded moderator APPROVE/REJECT verdict: {stats['humanReviewedCount']}")
+    lines.append(
+        f"- listings with a moderator APPROVE/REJECT verdict on an automated APPROVE/REJECT "
+        f"(override-comparable): {stats['humanReviewedCount']}"
+    )
     if stats["humanReviewOutcomes"]:
         lines.append("- outcomes for automated-REVIEW listings:")
         for decision, n in sorted(stats["humanReviewOutcomes"].items()):
