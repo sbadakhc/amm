@@ -6,6 +6,8 @@ nvidia/llama-3.1-nemotron-safety-guard-8b-v3 responses captured during developme
 
 import math
 
+import requests
+
 from agents import safety_agent
 from tests.conftest import FakeResponse
 
@@ -157,6 +159,115 @@ def test_prize_advance_fee_scam_detected_when_primary_classifier_missed_it(monke
     assert artifact["payload"]["violations"] == ["Prize/Advance-Fee Scam"]
     assert artifact["payload"]["confidence"] == 0.94
     assert "Prize/Advance-Fee Scam" in artifact["payload"]["explanation"]
+
+
+def test_low_confidence_unsafe_retries_and_corrects_spurious_flag(monkeypatch, canonical_clean):
+    """docs/decisions/0024: mirror of the low-confidence-safe retry (0019), found via
+    0023's eBay false-positive eval -- a real call flagged a plain clothing listing
+    unsafe at confidence 0.0086 (spurious 'Criminal Planning/Confessions'/'PII/Privacy'
+    categories). First call: unsafe but low confidence. Retry: safe with higher
+    confidence -- the more decisive verdict wins, correcting the spurious flag."""
+    responses = [
+        FakeResponse(
+            _response(
+                '{"User Safety": "unsafe", "Safety Categories": "Criminal Planning/Confessions, PII/Privacy"} ',
+                "unsafe",
+                math.log(0.0086),
+            )
+        ),
+        FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.99))),
+        _not_a_prize_scam(),
+    ]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    artifact = safety_agent.run_safety_agent(canonical_clean)
+
+    assert call_count["n"] == 3
+    assert artifact["payload"]["violations"] == []
+    assert artifact["payload"]["confidence"] == 0.99
+
+
+def test_low_confidence_unsafe_retry_keeps_violation_if_still_more_confident(monkeypatch, canonical_weapon):
+    """First call: unsafe but low confidence. Retry: still unsafe, and more confident
+    -- the violation is confirmed, not discarded just because the first call was
+    low-confidence."""
+    responses = [
+        FakeResponse(
+            _response(
+                '{"User Safety": "unsafe", "Safety Categories": "Guns and Illegal Weapons"} ',
+                "unsafe",
+                math.log(0.3),
+            )
+        ),
+        FakeResponse(
+            _response(
+                '{"User Safety": "unsafe", "Safety Categories": "Guns and Illegal Weapons"} ',
+                "unsafe",
+                math.log(0.95),
+            )
+        ),
+    ]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        resp = responses[call_count["n"]]
+        call_count["n"] += 1
+        return resp
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    artifact = safety_agent.run_safety_agent(canonical_weapon)
+
+    assert call_count["n"] == 2
+    assert artifact["payload"]["violations"] == ["Guns and Illegal Weapons"]
+    assert artifact["payload"]["confidence"] == 0.95
+
+
+def test_prize_scam_check_timeout_skips_instead_of_raising(monkeypatch, canonical_clean):
+    """A hung/unresponsive backend for the prize-scam second-opinion model must not
+    block the whole agent run -- the primary classifier's safe verdict stands, and no
+    violation is invented from a check that never completed."""
+    responses = [FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.9)))]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        if call_count["n"] < len(responses):
+            resp = responses[call_count["n"]]
+            call_count["n"] += 1
+            return resp
+        call_count["n"] += 1
+        raise requests.exceptions.ReadTimeout("simulated hung backend")
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    artifact = safety_agent.run_safety_agent(canonical_clean)
+
+    assert call_count["n"] == 2
+    assert artifact["payload"]["violations"] == []
+    assert artifact["payload"]["confidence"] == 0.9
+
+
+def test_prize_scam_check_connection_error_skips_instead_of_raising(monkeypatch, canonical_clean):
+    responses = [FakeResponse(_response('{"User Safety": "safe"} ', "safe", math.log(0.9)))]
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        if call_count["n"] < len(responses):
+            resp = responses[call_count["n"]]
+            call_count["n"] += 1
+            return resp
+        call_count["n"] += 1
+        raise requests.exceptions.ConnectionError("simulated connection failure")
+
+    monkeypatch.setattr(safety_agent.requests, "post", fake_post)
+    artifact = safety_agent.run_safety_agent(canonical_clean)
+
+    assert artifact["payload"]["violations"] == []
+    assert artifact["payload"]["confidence"] == 0.9
 
 
 def test_low_confidence_safe_retry_catches_violation(monkeypatch, canonical_weapon):
