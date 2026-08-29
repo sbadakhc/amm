@@ -85,8 +85,6 @@ run `generate_synthetic_data.py`), but the shape of it won't.
 ```
 $ claude
 > /status
-```
-```
 STATUS      MODEL                                        USED BY
 OK          nvidia/llama-3.1-nemotron-safety-guard-8b-v3 Safety Agent (primary classifier)
 UNREACHABLE mistralai/mistral-nemotron                   Safety Agent (prize-scam check), Consistency Agent (text check)
