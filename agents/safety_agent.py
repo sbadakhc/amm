@@ -14,6 +14,15 @@ from datetime import datetime, timezone
 
 import requests
 
+try:
+    from prompt_safety import wrap_untrusted
+except ImportError:  # running as a script, not a package -- repo root isn't on sys.path
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from prompt_safety import wrap_untrusted
+
 logger = logging.getLogger("amm.safety_agent")
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -53,7 +62,7 @@ def _classify(text: str) -> dict:
         },
         json={
             "model": MODEL,
-            "messages": [{"role": "user", "content": text}],
+            "messages": [{"role": "user", "content": wrap_untrusted("listing", text)}],
             "logprobs": True,
             "top_logprobs": 1,
         },
@@ -95,7 +104,7 @@ def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float] | None:
         "value (a prize, lottery winnings, an inheritance, a free item) that is "
         "contingent on the recipient first sending money, a fee, or payment details? "
         "Answer with exactly one word: true or false.\n"
-        f"Listing text: {text}"
+        f"{wrap_untrusted('listing', text)}"
     )
     last_error = None
     for _attempt in range(2):
