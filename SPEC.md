@@ -300,15 +300,31 @@ stated trade-off: a total outage makes this agent read as "fully consistent" to
 Decision Agent's fusion math (§4), even though `checksSkipped` records what actually
 happened — Decision Agent doesn't currently look at `checksSkipped`, only the score.
 
+**Heuristic backstop for `title_vs_description` when skipped (`docs/decisions/0030`):**
+found live during a moderator walkthrough — a title/description swap
+("Apple iPhone" title, "Samsung Galaxy" description) went completely uncaught because
+the exact check meant to catch it was skipped mid-outage. A narrow, manually-maintained
+keyword heuristic (`_heuristic_title_vs_description_contradiction`) runs **only** when
+the real model check returned skipped, never overriding an actual model verdict. It
+recognizes an explicit named competing brand (e.g. "Apple" vs "Samsung"), with
+disqualifying patterns for comparison/compatibility/barter phrasing ("better than",
+"compatible with", "for your") that would otherwise false-positive on ordinary
+marketplace language. A heuristic hit is recorded at `HEURISTIC_BACKSTOP_CONFIDENCE`
+(default 0.7 — deliberately below typical real model confidence) with
+`"method": "heuristic-backstop"` on the `checks` entry (vs. `"method": "model"` for a
+real call); a heuristic miss still counts as skipped, not as a passing check — it can't
+rule out non-brand-name contradictions, so absence of a hit is not evidence of
+consistency. Not a general contradiction detector, and not meant to become one.
+
 Written as a `ConsistencyAgent` artifact per §5.
 
 **Out**
 ```json
 { "checks": [
-    { "pair": "title_vs_description", "consistent": true },
-    { "pair": "description_vs_images", "consistent": true },
-    { "pair": "images_vs_declaredBrand", "consistent": true },
-    { "pair": "category_vs_detectedObjects", "consistent": true }
+    { "pair": "title_vs_description", "consistent": true, "method": "model" },
+    { "pair": "description_vs_images", "consistent": true, "method": "model" },
+    { "pair": "images_vs_declaredBrand", "consistent": true, "method": "model" },
+    { "pair": "category_vs_detectedObjects", "consistent": true, "method": "model" }
   ],
   "checksSkipped": [],
   "inconsistencyScore": 0.02 }
@@ -700,8 +716,9 @@ tracked separately in §8.4 rather than this table, since they depend on state-m
 and schema changes (§8.2/§8.3) that don't exist yet.
 
 **Inspecting a case's images.** `show_images` returns raw `s3://`/`file://` URLs, not
-viewable pixels. `.claude/skills/inspect-listing/` (invoked as `/inspect-listing
-<listingId>` or proactively when a moderator asks to see a case) runs
+viewable pixels. `.claude/skills/inspect/` (invoked as `/inspect
+<listingId>` or proactively when a moderator asks to see a case; renamed from
+`inspect-listing` for brevity, `docs/decisions/0031`) runs
 `scripts/inspect_listing.py`, which prints the listing's text + latest agent artifacts
 and fetches each image to a local temp file, then shows images one of two ways, paced
 by the moderator: by default Claude Code reads each path with its own Read tool,
@@ -898,4 +915,4 @@ Separate friction points surfaced in the same discussion, not part of this secti
 scope: no case ownership/locking between multiple human moderators working the same
 `PENDING_REVIEW` queue (§2.1's `FOR UPDATE SKIP LOCKED` only guards the automated
 pipeline's claim of `PENDING_MODERATION`); no SLA/aging or severity sort in
-`/inspect-listing --queue`; no batch actions across multiple cases at once.
+`/inspect --queue`; no batch actions across multiple cases at once.

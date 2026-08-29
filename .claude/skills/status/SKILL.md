@@ -1,13 +1,13 @@
 ---
-name: preflight
+name: status
 description: >
   Checks whether every NVIDIA-hosted model this pipeline depends on is actually
   callable right now, before running the pipeline, a demo, or a real-call test
   suite. Distinguishes a permanently removed model (GONE -- needs a code fix, not a
   retry) from a transiently down one (UNREACHABLE -- may just need a moment).
-  Triggers on "check the models", "are the models up", "is nvidia down",
+  Triggers on "check the models", "are the models up", "is nvidia down", "status",
   "preflight", "preflight check", "are we ready to run", or invoked directly as
-  /preflight.
+  /status.
 argument-hint: (no arguments)
 compatibility: Claude Code
 metadata:
@@ -15,7 +15,7 @@ metadata:
   version: "1.0"
 ---
 
-# Skill: preflight
+# Skill: status
 
 ## Purpose
 
@@ -62,4 +62,6 @@ missing," not "stop."
 - `scripts/preflight_check.py --quiet` suppresses the table for scripting; not
   typically what a moderator wants, prefer the default verbose form here.
 - This skill is about model *availability*, not moderation queue state -- for "what's
-  pending" or a specific case, use `/inspect-listing` instead.
+  pending" or a specific case, use `/inspect` instead.
+- Underlying script stays named `scripts/preflight_check.py` -- only the
+  slash-command name changed (`docs/decisions/0031`), not the script.
