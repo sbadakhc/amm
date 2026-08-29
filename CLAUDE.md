@@ -6,6 +6,7 @@
 
 - For security-related changes (secrets, untrusted input), consult
   `.claude/rules/security.md`.
+- For prose style (no em dashes), consult `.claude/rules/style.md`.
 - Custom commands live under `.claude/commands/` (`commit-pr`, `finish-pr`).
 
 ## Session Guardrails

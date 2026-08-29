@@ -1,5 +1,5 @@
 """
-Consistency Agent — cross-checks fields that should agree but are supplied
+Consistency Agent -- cross-checks fields that should agree but are supplied
 independently. See SPEC.md §3.3. Does its own lightweight image understanding rather
 than reusing Evidence Agent's output, since it depends only on the canonical document
 (§1) and must not wait on Evidence Agent.
@@ -119,7 +119,7 @@ def _load_image_data_url(url: str) -> str:
 
 def _verdict(content: list[dict]) -> tuple[bool, float]:
     """Finds the true/false answer token in a completion's logprobs and returns
-    (answer, confidence) — confidence is the model's own probability for that token,
+    (answer, confidence) -- confidence is the model's own probability for that token,
     not a separately requested score."""
     for tok in content:
         word = tok["token"].strip().strip("▁").lower()
@@ -215,7 +215,7 @@ def _aggregate_across_images(results: list[tuple[bool, float] | None]) -> tuple[
 
 
 def _disagreement(consistent: bool, confidence: float) -> float:
-    """Probability mass on "inconsistent" for this check — 1 - confidence when the
+    """Probability mass on "inconsistent" for this check -- 1 - confidence when the
     verdict was consistent, confidence itself when it wasn't."""
     return (1 - confidence) if consistent else confidence
 

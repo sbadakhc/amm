@@ -1,5 +1,5 @@
 """
-Evidence Agent — facts only, no judgment. See SPEC.md §3.2.
+Evidence Agent -- facts only, no judgment. See SPEC.md §3.2.
 
 OCR, object/brand detection, and document-level extraction (certificate/serial
 numbers, expiry, country of origin) via a vision-language model. Compares detected
@@ -152,7 +152,7 @@ def run_evidence_agent(canonical_doc: dict) -> dict:
         expiry_date = expiry_date or extracted.get("expiryDate")
         country_of_origin = country_of_origin or extracted.get("countryOfOrigin")
 
-    # Placeholder values for genuinely unbranded/commodity goods — not a brand claim,
+    # Placeholder values for genuinely unbranded/commodity goods -- not a brand claim,
     # so there's nothing for packaging to corroborate and no mismatch to flag.
     GENERIC_BRAND_PLACEHOLDERS = {"generic", "unbranded", "no brand", "none", "n/a"}
 
@@ -160,7 +160,7 @@ def run_evidence_agent(canonical_doc: dict) -> dict:
     detected_brands_lower = {b.lower() for b in brands}
     all_attempted_images_failed = bool(attempted_images) and len(images_skipped) == len(attempted_images)
     # No corroborating brand on any image counts as a mismatch, not just a conflicting
-    # one — an undetected declared brand is exactly the counterfeit-branding signal
+    # one -- an undetected declared brand is exactly the counterfeit-branding signal
     # Policy Agent's C001 needs (§3.5). Not when every image's extraction failed,
     # though: that's "couldn't check," not "checked and found nothing."
     brand_mismatch = (

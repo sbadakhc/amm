@@ -1,5 +1,5 @@
 """
-Safety Agent — content-safety classification. See SPEC.md §3.4.
+Safety Agent -- content-safety classification. See SPEC.md §3.4.
 
 Calls nvidia/llama-3.1-nemotron-safety-guard-8b-v3, not nemotron-3.5-content-safety:
 the latter only returns a binary safe/unsafe verdict with no category, and Policy

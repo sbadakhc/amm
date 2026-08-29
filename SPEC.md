@@ -6,12 +6,12 @@ status: draft
 audience: ai-coding-agent
 ---
 
-# Agentic Marketplace Moderator — Build Spec
+# Agentic Marketplace Moderator -- Build Spec
 
 A multi-agent moderation pipeline for marketplace listings. A seller submits a listing;
 a chain of agents evaluates it and routes it to **APPROVE**, **REJECT**, or **REVIEW**
 (human-in-the-loop). Moderators work the review queue entirely through a conversational
-CLI — no web UI.
+CLI -- no web UI.
 
 Stack: **Postgres** (storage), **Claude Code** (orchestration + CLI), **NVIDIA Nemotron
 3.5 Content Safety** (called via its hosted API for the Safety Agent step).
@@ -56,17 +56,17 @@ flowchart TD
 ```
 
 Intake runs first (produces the canonical document). Evidence, Consistency, Safety, and
-Policy then run in parallel off that document — Consistency depends only on the canonical
+Policy then run in parallel off that document -- Consistency depends only on the canonical
 document too, not on Evidence's output, so it doesn't need to wait in line behind it.
-Decision Agent waits on all four. Single process, async fan-out/fan-in — no broker, no
-separate API service. Escalation and appeal (§8) are moderator-only — the automated
+Decision Agent waits on all four. Single process, async fan-out/fan-in -- no broker, no
+separate API service. Escalation and appeal (§8) are moderator-only -- the automated
 Decision Agent never produces `ESCALATED` or `APPEAL_REQUESTED`.
 
 ---
 
 ## 2. Listing State Machine
 
-Listings arrive in the DB with `status: "PENDING_MODERATION"` — that value is the
+Listings arrive in the DB with `status: "PENDING_MODERATION"` -- that value is the
 workflow trigger, not a status the workflow assigns.
 
 ```mermaid
@@ -108,7 +108,7 @@ simplification (§8.4), not solved yet.
 
 ### 2.1 Claiming Listings (Locking Model)
 
-The poller claims work with a single atomic transaction — no lock table, no broker:
+The poller claims work with a single atomic transaction -- no lock table, no broker:
 
 ```sql
 UPDATE listings
@@ -124,7 +124,7 @@ RETURNING *;
 ```
 
 `FOR UPDATE SKIP LOCKED` means a row already locked by another in-flight transaction is
-skipped, not blocked on — two poller instances (or a restarted poller racing its own
+skipped, not blocked on -- two poller instances (or a restarted poller racing its own
 predecessor) can never claim the same listing twice. This is what makes it safe to run
 more than one poller even though each individual pipeline run stays single-process
 fan-out/fan-in (§1); no cross-process coordination beyond the one `UPDATE` is needed.
@@ -132,7 +132,7 @@ fan-out/fan-in (§1); no cross-process coordination beyond the one `UPDATE` is n
 **Stale claims.** A worker that crashes mid-pipeline leaves its row in `PROCESSING`
 indefinitely. A sweep, run on a timer (e.g. every minute), resets any row that has been
 `PROCESSING` longer than a lease timeout (default 5 minutes, configurable) to
-`PENDING_REVIEW` flagged `FAILED` — the same terminal-on-error path as §4, not a special
+`PENDING_REVIEW` flagged `FAILED` -- the same terminal-on-error path as §4, not a special
 case:
 
 ```sql
@@ -150,7 +150,7 @@ Requires an `updated_at` column on `listings`, touched on every status transitio
 
 ### 3.1 Intake Agent
 Reads a listing row where `status = "PENDING_MODERATION"` and maps it to the canonical
-document every other agent consumes. Does not need to introspect the schema — this is
+document every other agent consumes. Does not need to introspect the schema -- this is
 the actual listing shape:
 
 **In (DB row)**
@@ -193,25 +193,25 @@ the actual listing shape:
   "condition": "new"
 }
 ```
-Images are `s3://` URIs, not HTTP URLs — Evidence and Consistency Agents fetch them via
+Images are `s3://` URIs, not HTTP URLs -- Evidence and Consistency Agents fetch them via
 `images.fetch_image_bytes` (a shared `boto3` helper), not a plain web fetch. Works
 against real AWS S3 or any S3-compatible store (self-hosted via MinIO for local
-dev/test — see `docs/decisions/0006-s3-storage-self-hosted-minio.md`).
+dev/test -- see `docs/decisions/0006-s3-storage-self-hosted-minio.md`).
 
 **`images[].url` is seller-controlled with no schema-level restriction on
 scheme/path/bucket.** Confirmed live (`docs/decisions/0033`) that before a fix,
-`fetch_image_bytes` would read *any* local file a `file://` URL pointed at — no
-allowlisting — with two automatic trigger paths: pipeline processing (uploading the
+`fetch_image_bytes` would read *any* local file a `file://` URL pointed at -- no
+allowlisting -- with two automatic trigger paths: pipeline processing (uploading the
 file's bytes to NVIDIA's hosted API as "image" content) and `/inspect --queue`
 (serving it to a moderator's browser). `fetch_image_bytes` now restricts `file://` to
 `LOCAL_IMAGE_ROOTS` (env-configurable, default: this project's own `images/`
 directory) and offers an opt-in `S3_ALLOWED_BUCKETS` allowlist for `s3://`.
 
 `declaredBrand` is carried through specifically so the Evidence Agent can cross-check it
-against whatever brand it detects from the images/OCR (see §3.2) — that mismatch is what
+against whatever brand it detects from the images/OCR (see §3.2) -- that mismatch is what
 drives the "counterfeit branding" case already used as the CLI example in §6.
 
-`sellerPreviousViolations` is carried through as a plain field, not a separate agent —
+`sellerPreviousViolations` is carried through as a plain field, not a separate agent --
 the Decision Agent factors seller history directly into confidence/severity (§3.6)
 without needing a dedicated "risk agent" to compute it.
 
@@ -220,23 +220,23 @@ Facts only, no judgment. OCR, image understanding, brand/object detection, and
 document-level extraction (certificate numbers, serial numbers, expiry dates, country of
 origin where visible on packaging/labels) via vision-language model
 `meta/llama-3.2-11b-vision-instruct` (originally `nvidia/nemotron-nano-12b-v2-vl`,
-NVIDIA end-of-lifed that model 2026-08-26 — `docs/decisions/0025`), one call per image,
+NVIDIA end-of-lifed that model 2026-08-26 -- `docs/decisions/0025`), one call per image,
 results merged across all of a listing's images. Compares detected brand(s) against the canonical document's
-`declaredBrand` and flags a mismatch if they disagree — that's the input the Policy
+`declaredBrand` and flags a mismatch if they disagree -- that's the input the Policy
 Agent needs to catch counterfeit listings. **No brand detected on any image at all also
-counts as a mismatch** when a brand is declared — an undeclared logo and a genuinely
+counts as a mismatch** when a brand is declared -- an undeclared logo and a genuinely
 absent one are both "the packaging doesn't corroborate the claim," which is exactly the
 counterfeit-branding signal C001 needs; it is not required that a *different* brand be
 detected. Exception: `declaredBrand` values of `generic`, `unbranded`, `no brand`,
 `none`, or `n/a` (case-insensitive) aren't a brand claim at all, so they never trigger a
-mismatch — otherwise every legitimately unbranded/commodity listing would falsely match
+mismatch -- otherwise every legitimately unbranded/commodity listing would falsely match
 C001.
 
 **Fails open per-image on a hung/unresponsive backend (`docs/decisions/0029`):**
 extraction for each image independently uses its own timeout
 (`EVIDENCE_EXTRACTION_TIMEOUT`, default 20s, down from an old 60s) and retries once on
 a malformed (non-JSON) response before skipping that image (added to `imagesSkipped`)
-rather than crashing the whole listing — one image's extraction failing doesn't affect
+rather than crashing the whole listing -- one image's extraction failing doesn't affect
 the others. If *every* attempted image was skipped, `brandMismatch` stays `false`
 regardless of `declaredBrand`, deliberately different from the zero-images-at-all case
 above: "couldn't check" (an infrastructure failure) must not manufacture the same
@@ -254,40 +254,40 @@ Written as an `EvidenceAgent` artifact per §5 (this is its `payload`):
 ```
 
 Implemented in `agents/evidence_agent.py`. Images are fetched via the shared
-`images.fetch_image_bytes` helper — `file://` for local dev/demo, `s3://` (the
+`images.fetch_image_bytes` helper -- `file://` for local dev/demo, `s3://` (the
 production scheme, §3.1) via `boto3`.
 
 ### 3.3 Consistency Agent
 Cross-checks fields that should agree with each other but are supplied independently:
 title↔description, description↔images, images↔declared brand, category↔detected
-objects. Doesn't judge policy — just surfaces disagreement for the Decision Agent to
+objects. Doesn't judge policy -- just surfaces disagreement for the Decision Agent to
 weigh. Does its own lightweight image understanding for the three image-based checks
-rather than reusing Evidence Agent's output — required by §1: Consistency depends only
+rather than reusing Evidence Agent's output -- required by §1: Consistency depends only
 on the canonical document, not on Evidence's output.
 
 Each check is one true/false model call (text model `mistralai/mistral-nemotron` for
-title↔description, vision model `meta/llama-3.2-11b-vision-instruct` — see §3.2's note
-on the vision model swap, `docs/decisions/0025` — for the three image-based checks).
+title↔description, vision model `meta/llama-3.2-11b-vision-instruct` -- see §3.2's note
+on the vision model swap, `docs/decisions/0025` -- for the three image-based checks).
 **Prompt injection defense (`docs/decisions/0033`):** every field interpolated into a
 check's prompt (title, description, declared brand, category) is wrapped via
-`prompt_safety.wrap_untrusted` — delimiters plus an explicit "treat as data, not
+`prompt_safety.wrap_untrusted` -- delimiters plus an explicit "treat as data, not
 instructions" framing. Confirmed via a real adversarial test this is defense-in-depth,
 not a guarantee: injected text in a description still fooled the text-check model on
 some trials even with wrapping in place, though at sharply reduced confidence (99.66%
-→ 29-70% across repeated trials) — see `agents/policy_agent.py`'s independent INJ001
+→ 29-70% across repeated trials) -- see `agents/policy_agent.py`'s independent INJ001
 detector (§3.5) for the complementary, non-LLM containment layer.
 `wrap_untrusted` escapes `<`/`>` in the untrusted text before delimiting it
-(`docs/decisions/0034`, found by `/code-review`) — without this, text containing a
+(`docs/decisions/0034`, found by `/code-review`) -- without this, text containing a
 literal `</label>`-shaped substring could close the delimited block early and defeat
 the wrapping's own purpose. With more than one
 image, a check is `consistent` if *any* image
-confirms it. `inconsistencyScore` is not a separate judgment call — it's the mean, over
+confirms it. `inconsistencyScore` is not a separate judgment call -- it's the mean, over
 all checks, of the probability mass the model itself placed on the "inconsistent"
 answer (1 − confidence when the verdict was consistent, confidence itself when it
 wasn't), so a run of confidently-consistent checks produces a score near 0 without
 that number being invented.
 
-Note: `description_vs_images` is measurably noisier than the other three checks —
+Note: `description_vs_images` is measurably noisier than the other three checks --
 tested (not assumed) whether real product photography would fix this, per
 `docs/decisions/0013`. Result was mixed, not a clean fix:
 
@@ -296,14 +296,14 @@ tested (not assumed) whether real product photography would fix this, per
   false-positive risk (misreading incidental text near a logo as a fabricated brand)
   that's now fixed by picking unambiguous photos and verified reliable (10/10 real
   calls).
-- It did **not** reduce `description_vs_images` noise for the `clean` listing —
+- It did **not** reduce `description_vs_images` noise for the `clean` listing --
   mean `inconsistencyScore` across 6 real-call samples went from 0.171 (old synthetic
   placeholder) to ~0.395 (real photo), i.e. noisier, not less. The synthetic
   placeholder's OCR-readable text let the vision model "match" by literally reading
   text back, not by genuine visual reasoning; a real photo that shows only the bare
   device (no screen, no box, nothing distinguishing "Pro Max 256GB" from any other
   iPhone 16) is honestly harder to visually confirm against a specific title/spec
-  claim, not easier. Remains open — a photo with more distinguishing visual detail
+  claim, not easier. Remains open -- a photo with more distinguishing visual detail
   (screen on, retail packaging with model/storage text) is the next thing to try, not
   assumed to be the fix without testing it too.
 
@@ -313,16 +313,16 @@ respond at all, no error, no timeout of its own (same finding as `0022`, which f
 Safety Agent's analogous case). Each of the four checks above uses its own short
 timeout (`CONSISTENCY_CHECK_TIMEOUT`, default 10s) rather than the old shared 30s, and
 independently skips (lands in `checksSkipped`, not `checks`) on a timeout, connection
-failure, or two malformed responses in a row — the other checks are unaffected. A
+failure, or two malformed responses in a row -- the other checks are unaffected. A
 skipped check contributes nothing to `inconsistencyScore` (excluded from the mean
 entirely, not counted as consistent or inconsistent); if every check was skipped,
 `inconsistencyScore` defaults to `0.0` rather than raising on an empty mean. Known,
 stated trade-off: a total outage makes this agent read as "fully consistent" to
 Decision Agent's fusion math (§4), even though `checksSkipped` records what actually
-happened — Decision Agent doesn't currently look at `checksSkipped`, only the score.
+happened -- Decision Agent doesn't currently look at `checksSkipped`, only the score.
 
 **Heuristic backstop for `title_vs_description` when skipped (`docs/decisions/0030`):**
-found live during a moderator walkthrough — a title/description swap
+found live during a moderator walkthrough -- a title/description swap
 ("Apple iPhone" title, "Samsung Galaxy" description) went completely uncaught because
 the exact check meant to catch it was skipped mid-outage. A narrow, manually-maintained
 keyword heuristic (`_heuristic_title_vs_description_contradiction`) runs **only** when
@@ -331,9 +331,9 @@ recognizes an explicit named competing brand (e.g. "Apple" vs "Samsung"), with
 disqualifying patterns for comparison/compatibility/barter phrasing ("better than",
 "compatible with", "for your") that would otherwise false-positive on ordinary
 marketplace language. A heuristic hit is recorded at `HEURISTIC_BACKSTOP_CONFIDENCE`
-(default 0.7 — deliberately below typical real model confidence) with
+(default 0.7 -- deliberately below typical real model confidence) with
 `"method": "heuristic-backstop"` on the `checks` entry (vs. `"method": "model"` for a
-real call); a heuristic miss still counts as skipped, not as a passing check — it can't
+real call); a heuristic miss still counts as skipped, not as a passing check -- it can't
 rule out non-brand-name contradictions, so absence of a hit is not evidence of
 consistency. Not a general contradiction detector, and not meant to become one.
 
@@ -355,12 +355,12 @@ Implemented in `agents/consistency_agent.py`.
 
 ### 3.4 Safety Agent
 Content-safety classification, model `nvidia/llama-3.1-nemotron-safety-guard-8b-v3`
-(not `nemotron-3.5-content-safety` — that model only returns a binary safe/unsafe
+(not `nemotron-3.5-content-safety` -- that model only returns a binary safe/unsafe
 verdict with no category, and Policy Agent needs a category to pick a rule). Classifies
 `title` + `description` text; images/OCR-based safety checks are Evidence Agent's job
 (§3.2), not this agent's. Written as a `SafetyAgent` artifact per §5. Both the
 classification call and the prize-scam second-opinion check (below) wrap the raw
-listing text via `prompt_safety.wrap_untrusted` (`docs/decisions/0033`) — this
+listing text via `prompt_safety.wrap_untrusted` (`docs/decisions/0033`) -- this
 purpose-built classifier resisted a direct injection attempt in real-call testing
 (confirmed both before and after adding the wrapping), noted as a real, model-specific
 data point, not a defense to rely on alone given §3.3's contrary result on a
@@ -371,22 +371,22 @@ general-purpose model.
 is the model's raw `Safety Categories` string, split on `,`.
 
 A verdict below `SAFE_RETRY_CONFIDENCE_THRESHOLD` (default 0.5) gets one retry
-(`docs/decisions/0019`, extended by `0024`) — confirmed via real calls that the model
+(`docs/decisions/0019`, extended by `0024`) -- confirmed via real calls that the model
 occasionally emits a well-formed but wrong verdict at near-zero confidence, in either
 direction: `safe` on genuinely fraudulent text (0019), or `unsafe` with spurious
 categories on genuinely clean text (0024, found via `docs/decisions/0023`'s eBay
-false-positive eval — a real clothing listing was flagged `Criminal
+false-positive eval -- a real clothing listing was flagged `Criminal
 Planning/Confessions` + `PII/Privacy` at confidence 0.0086). The two directions
 resolve asymmetrically on purpose: a low-confidence `safe` prefers the retry if it
 comes back unsafe at all, or more confidently safe (biases toward catching missed
 fraud, never invents a violation from a safe-then-safe pair); a low-confidence
-`unsafe` has no such bias — whichever of the two calls was more confident wins (the
+`unsafe` has no such bias -- whichever of the two calls was more confident wins (the
 "prefer unsafe" bias would make this retry pointless, since the first call is already
 unsafe). Configurable via the `SAFETY_SAFE_RETRY_THRESHOLD` env var, same pattern as
 `docs/decisions/0008`.
 **Known limitation, not fixed by either retry direction:** some fraud patterns
 (confirmed: lottery/advance-fee "you won a prize, pay a fee to claim it" scams) are a
-systematic model blind spot, not a sampling-variance one — the model confidently and
+systematic model blind spot, not a sampling-variance one -- the model confidently and
 consistently calls them safe regardless of retries, phrasing, or language. See
 `docs/decisions/0019` and the targeted check below (`0020`).
 
@@ -394,27 +394,27 @@ A listing still `safe` after the retry above gets one more check: a targeted que
 to a general text model (`mistralai/mistral-nemotron`, same model and "ask one specific
 true/false question" pattern already used by Consistency Agent) asking whether the
 listing describes receiving something of value contingent on the recipient first
-sending money — the prize/advance-fee scam pattern the primary classifier can't see
+sending money -- the prize/advance-fee scam pattern the primary classifier can't see
 (`docs/decisions/0020`). Only runs when the primary classifier already said safe, to
 avoid the extra call on listings already flagged unsafe by something else. A `true`
-result adds a synthetic `Prize/Advance-Fee Scam` category — not from the safety-guard
-model's own taxonomy — mapped to F001 like the others. Confirmed via real calls: 13/15
+result adds a synthetic `Prize/Advance-Fee Scam` category -- not from the safety-guard
+model's own taxonomy -- mapped to F001 like the others. Confirmed via real calls: 13/15
 (~87%) recall across three real-call test variants repeated 5x each, up from 0/9 before
-this check existed — a large improvement, not a complete fix; still probabilistic, not
+this check existed -- a large improvement, not a complete fix; still probabilistic, not
 guaranteed on every call.
 
 **Fails open on a hung/unresponsive backend (`docs/decisions/0022`):** real-call
 testing found `mistral-nemotron`'s endpoint intermittently accepts the connection and
-request but never sends a response — no error, no timeout of its own. This check uses
-its own short timeout (`PRIZE_SCAM_CHECK_TIMEOUT`, default 10s — real-call latency is
+request but never sends a response -- no error, no timeout of its own. This check uses
+its own short timeout (`PRIZE_SCAM_CHECK_TIMEOUT`, default 10s -- real-call latency is
 normally under 2s) rather than the primary classifier's 30s, and treats a timeout,
 connection failure, or two malformed responses in a row as "skip" rather than raising:
 the primary classifier's verdict stands unchanged, and a `logger.warning` records the
 skip. During an outage, this specific check's recall reverts to the pre-0020 blind
-spot for its duration — accepted as one signal among several (Policy Agent's other
+spot for its duration -- accepted as one signal among several (Policy Agent's other
 F001 triggers, human review) rather than the sole fraud defense.
 
-Full taxonomy confirmed empirically (`docs/decisions/0012`) — real calls to the real
+Full taxonomy confirmed empirically (`docs/decisions/0012`) -- real calls to the real
 model with one prompt per suspected category, not a scraped model-card page.
 Categories observed: `Guns and Illegal Weapons`, `Controlled/Regulated Substances`,
 `Criminal Planning/Confessions`, `Illegal Activity`, `Fraud/Deception`, `Sexual`,
@@ -422,13 +422,13 @@ Categories observed: `Guns and Illegal Weapons`, `Controlled/Regulated Substance
 `Suicide and Self Harm`, `Violence`, `Harassment`, `Profanity`,
 `Copyright/Trademark/Plagiarism`, `Political/Misinformation/Conspiracy`,
 `Needs Caution`. Only the subset that's clearly marketplace-listing-policy relevant
-maps to a Policy Agent rule (§3.5) — most of the rest are general chat-safety
+maps to a Policy Agent rule (§3.5) -- most of the rest are general chat-safety
 categories (violence, hate speech, profanity, misinformation) not obviously
 actionable on a product listing; revisit if this pipeline's scope ever grows beyond
-listing text. `Criminal Planning/Confessions` and `Illegal Activity` are exceptions —
+listing text. `Criminal Planning/Confessions` and `Illegal Activity` are exceptions --
 not general chat-safety noise but a reliable fraud signal in Arabic-language listing
 text specifically (`docs/decisions/0018`), mapped to F001. `Prize/Advance-Fee Scam`
-(`docs/decisions/0020`) is not part of this taxonomy at all — it's synthetic, emitted
+(`docs/decisions/0020`) is not part of this taxonomy at all -- it's synthetic, emitted
 by Safety Agent's own second-opinion check, not the safety-guard classifier.
 `explanation` is generated deterministically from the category list, not model-written
 prose.
@@ -445,10 +445,10 @@ Implemented in `agents/safety_agent.py`.
 Maps evidence/safety/consistency findings to policy rules, keyed off `categoryId` (e.g.
 `electronics.mobile`). Rule sets are looked up per category prefix
 (`RULE_SETS_BY_CATEGORY_PREFIX` in `agents/policy_agent.py`), designed to let different
-category trees (e.g. `electronics.*` vs. `finance.*`) apply different rule sets — but
+category trees (e.g. `electronics.*` vs. `finance.*`) apply different rule sets -- but
 today only the catch-all `"*"` entry exists, so every category currently gets the same
 7 rules. No category has needed narrowing yet; add a prefix key when one does. Returns
-an **array** — a listing can match more than one rule.
+an **array** -- a listing can match more than one rule.
 
 | Rule ID | Description | Severity | Triggered by |
 |---|---|---|---|
@@ -458,14 +458,14 @@ an **array** — a listing can match more than one rule.
 | D001 | Illegal drugs prohibited | Critical | Safety Agent `violations` contains `Controlled/Regulated Substances` |
 | F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception`, `Criminal Planning/Confessions`, `Illegal Activity`, or `Prize/Advance-Fee Scam` |
 | S001 | Sexual content involving minors prohibited | Critical, **autoReject** | Safety Agent `violations` contains `Sexual (minor)` |
-| INJ001 | Possible prompt injection or model manipulation attempt | High | Raw `title`/`description` matches a narrow, non-LLM keyword pattern (`docs/decisions/0033`) — deliberately not `autoReject`, forces `REVIEW` instead |
+| INJ001 | Possible prompt injection or model manipulation attempt | High | Raw `title`/`description` matches a narrow, non-LLM keyword pattern (`docs/decisions/0033`) -- deliberately not `autoReject`, forces `REVIEW` instead |
 
 C001's two triggers are deduped to at most one match (the higher of the two
-confidences) — never two separate `C001` entries in `matches` even if both signals
+confidences) -- never two separate `C001` entries in `matches` even if both signals
 fire. The `Copyright/Trademark/Plagiarism` text signal was confirmed unreliable in
-testing (`docs/decisions/0012`) — treat it as a secondary signal, not a substitute for
+testing (`docs/decisions/0012`) -- treat it as a secondary signal, not a substitute for
 Evidence Agent's image-based `brandMismatch`. F001's four triggers dedupe the same
-way — at most one `F001` match even if more than one of the four categories fires.
+way -- at most one `F001` match even if more than one of the four categories fires.
 
 `Criminal Planning/Confessions` and `Illegal Activity` were originally left unmapped
 (`docs/decisions/0012`) as too broad to be their own signal. `docs/decisions/0018`
@@ -477,10 +477,10 @@ Arabic listings. `docs/decisions/0019` (a retry on low-confidence safe verdicts)
 this mapping together substantially closed the non-determinism gap for job/real-estate
 scams (confirmed 5/5 recall on repeat real calls). `Prize/Advance-Fee Scam` was added
 separately (`docs/decisions/0020`) for a systematic, not stochastic, blind spot the
-other three triggers never catch — see §3.4.
+other three triggers never catch -- see §3.4.
 
 Each match also carries a `confidence`, attributed from whichever upstream agent's signal
-triggered the rule — Policy Agent passes through that agent's number rather than
+triggered the rule -- Policy Agent passes through that agent's number rather than
 inventing its own probability:
 
 | Rule triggered by | `confidence` source |
@@ -488,7 +488,7 @@ inventing its own probability:
 | SafetyAgent violation (W001, D001, F001, S001) | `SafetyAgent.payload.confidence` |
 | EvidenceAgent `brandMismatch: true` and/or SafetyAgent `Copyright/Trademark/Plagiarism` (C001) | `max(1.0 if brandMismatch, SafetyAgent.payload.confidence if the category fired)` |
 | ConsistencyAgent `inconsistencyScore` above threshold (C004) | `ConsistencyAgent.payload.inconsistencyScore` |
-| Raw listing text matches an injection pattern (INJ001) | Fixed `1.0` — a deterministic keyword match either fires or doesn't, no upstream agent confidence to pass through |
+| Raw listing text matches an injection pattern (INJ001) | Fixed `1.0` -- a deterministic keyword match either fires or doesn't, no upstream agent confidence to pass through |
 
 Written as a `PolicyAgent` artifact per §5.
 
@@ -499,27 +499,27 @@ Written as a `PolicyAgent` artifact per §5.
 ] }
 ```
 
-Deterministic — pure rule logic over the three upstream payloads, no model call.
-Implemented in `agents/policy_agent.py`. `autoReject` is `true` only for S001 — the
+Deterministic -- pure rule logic over the three upstream payloads, no model call.
+Implemented in `agents/policy_agent.py`. `autoReject` is `true` only for S001 -- the
 hard-override lever reserved since the original spec (§4 step 1) for a rule that should
 bypass confidence-based routing entirely; every other rule leaves it `false`.
-`CONSISTENCY_THRESHOLD` (0.48) for C004 is tuned from real model-call data — 8 real
+`CONSISTENCY_THRESHOLD` (0.48) for C004 is tuned from real model-call data -- 8 real
 Consistency Agent runs per demo scenario showed a clean gap between the one scenario
 that should trigger C004 (`inconsistent`, scores 0.505-0.712) and every scenario that
 shouldn't (0.089-0.461); see `docs/decisions/0014`. Fixes C004 rule accuracy (e.g. the
 `clean` scenario no longer falsely matches it) but does **not** on its own get `clean`
-to auto-approve — that's gated by the separate, stricter `AUTO_APPROVE_THRESHOLD` bar
+to auto-approve -- that's gated by the separate, stricter `AUTO_APPROVE_THRESHOLD` bar
 (§4), still an open question (`docs/decisions/0013`). Configurable via the
 `CONSISTENCY_THRESHOLD` env var (read once at process start) or a per-call override on
-`run_policy_agent` — see `docs/decisions/0008-env-var-thresholds.md`.
+`run_policy_agent` -- see `docs/decisions/0008-env-var-thresholds.md`.
 
 ### 3.6 Decision Agent
 Aggregates `PolicyAgent.matches` into a single decision and confidence using the fusion
-algorithm in §4 — it combines the confidences Policy Agent already attributed per match,
+algorithm in §4 -- it combines the confidences Policy Agent already attributed per match,
 it does not re-derive them from raw agent outputs. Seller history
 (`sellerPreviousViolations`) shifts confidence toward REVIEW/REJECT for otherwise-
 borderline cases (§4) rather than triggering its own rule. Written as a `DecisionAgent`
-artifact per §5 — this is that artifact's `payload`:
+artifact per §5 -- this is that artifact's `payload`:
 
 **Out**
 ```json
@@ -527,35 +527,35 @@ artifact per §5 — this is that artifact's `payload`:
   "explanation": "Brand detected but authenticity cannot be verified from supplied images." }
 ```
 
-Deterministic — pure fusion logic per §4, no model call. `explanation` is generated
+Deterministic -- pure fusion logic per §4, no model call. `explanation` is generated
 from the matched rules' own descriptions (or the residual inconsistency score when
 none matched) plus the seller-history adjustment if one applied, not model-written
-prose — same pattern as Safety and Consistency Agents. Implemented in
+prose -- same pattern as Safety and Consistency Agents. Implemented in
 `agents/decision_agent.py`.
 
 ---
 
 ## 4. Decision Fusion & Confidence Routing
 
-Deterministic, in three steps — no learned weighting, no free-form LLM judgment call on
+Deterministic, in three steps -- no learned weighting, no free-form LLM judgment call on
 the final number:
 
-**Step 1 — aggregate confidence.**
+**Step 1 -- aggregate confidence.**
 - `matches` non-empty → `confidence = max(match.confidence for match in matches)`.
-- `matches` empty → `confidence = 1 - ConsistencyAgent.payload.inconsistencyScore` — the
+- `matches` empty → `confidence = 1 - ConsistencyAgent.payload.inconsistencyScore` -- the
   only residual risk signal available when no policy rule fired.
 
-**Step 2 — seller history adjustment.** If `sellerPreviousViolations > 0`, compute
+**Step 2 -- seller history adjustment.** If `sellerPreviousViolations > 0`, compute
 `adjustment = min(0.05 * sellerPreviousViolations, 0.20)`:
 - Would this route to APPROVE (see Step 3) → subtract `adjustment` from `confidence`
   first (repeat-violation sellers lose the benefit of the doubt, more of their
   borderline listings fall through to REVIEW).
 - Would this route to REJECT → add `adjustment` to `confidence` first (repeat-violation
   sellers need less certainty to confirm a reject).
-- This is the only effect seller history has — it never manufactures a policy match of
+- This is the only effect seller history has -- it never manufactures a policy match of
   its own (§3.1).
 
-**Step 3 — routing**, using the adjusted `confidence`:
+**Step 3 -- routing**, using the adjusted `confidence`:
 
 | Order | Condition | Result |
 |---|---|---|
@@ -565,11 +565,11 @@ the final number:
 | 4 | otherwise | Review |
 
 Thresholds (`0.95`, `0.90`, the `0.20` adjustment cap) are configurable, not hard-coded
-— via `CRITICAL_REJECT_THRESHOLD` / `AUTO_APPROVE_THRESHOLD` /
+ -- via `CRITICAL_REJECT_THRESHOLD` / `AUTO_APPROVE_THRESHOLD` /
 `SELLER_HISTORY_ADJUSTMENT_PER_VIOLATION` / `SELLER_HISTORY_ADJUSTMENT_CAP` env vars
 (read once at process start, same pattern as `service.py`'s config) or per-call
-overrides on `run_decision_agent` — see `docs/decisions/0008-env-var-thresholds.md`.
-Critical-severity matches never auto-approve regardless of score — they resolve to
+overrides on `run_decision_agent` -- see `docs/decisions/0008-env-var-thresholds.md`.
+Critical-severity matches never auto-approve regardless of score -- they resolve to
 REJECT or REVIEW only.
 
 If any agent errors or times out, the listing goes to `PENDING_REVIEW` (flagged `FAILED`)
@@ -580,7 +580,7 @@ rather than defaulting to approve.
 ## 5. Storage: Append-Only Artifact Log
 
 The raw listing row is never mutated. Each agent run writes one immutable artifact
-instead — this is what makes single-stage reruns (`rerun_analysis`) safe and gives a full
+instead -- this is what makes single-stage reruns (`rerun_analysis`) safe and gives a full
 audit trail without a flat "decision + evidence" blob that different agents all write
 into.
 
@@ -596,7 +596,7 @@ into.
 
 One row per agent run, `agent` + `version` identifying what produced it. A rerun
 (e.g. Safety Agent on a newer model) appends a new artifact rather than overwriting the
-old one — prior runs stay queryable for comparison.
+old one -- prior runs stay queryable for comparison.
 
 **Decision artifacts** are the same shape, with the Decision Agent's output as payload,
 and reference the specific upstream artifacts they were computed from:
@@ -619,7 +619,7 @@ and reference the specific upstream artifacts they were computed from:
 }
 ```
 
-`policyRules` stays the single source of truth for what was violated — no separate free-
+`policyRules` stays the single source of truth for what was violated -- no separate free-
 text `violations` list duplicating it; any human-readable line is derived from the rule's
 own description plus `explanation` for the case-specific reasoning.
 
@@ -636,14 +636,14 @@ than editing the automated one.
 
 Conversational, tool-driven, no direct DB access. Implemented as a plain Python tool
 layer in `cli/tools.py` (backed by `db.py` and `pipeline.py`, orchestration in
-`pipeline.py`, Intake mapping in `intake.py`) — there is no separate chat loop; a
+`pipeline.py`, Intake mapping in `intake.py`) -- there is no separate chat loop; a
 moderator drives it by talking to Claude Code, which calls these functions directly.
 Verified end-to-end against a real Postgres instance: seeded via
 `generate_synthetic_data.py`, processed with `pipeline.poll_and_process()`, then every
 tool below exercised against it (`list_pending`, `get_listing`, `explain_case`,
 `show_images`, `search_policy`, `find_similar_cases`, `approve_listing`,
 `reject_listing`, `rerun_analysis`, `escalate_case`, `request_appeal`,
-`resolve_appeal`, `list_seller_cases`, `suspend_seller`, `reinstate_seller`) —
+`resolve_appeal`, `list_seller_cases`, `suspend_seller`, `reinstate_seller`) --
 moderator overrides confirmed to append a new `DecisionAgent` artifact rather than
 overwrite the automated one (§5).
 
@@ -651,7 +651,7 @@ overwrite the automated one (§5).
 ```
 > show next case
 
-Listing 98342 — Rolex Watch
+Listing 98342 -- Rolex Watch
 Status: Pending Review · Confidence: 74%
 Issues: Counterfeit branding, Missing serial number
 Recommendation: Manual verification required.
@@ -676,10 +676,10 @@ REVIEW (Confidence: 0.74)
 
 > approve
 ```
-`explain case` reads straight off the artifact log (§5) — one section per agent artifact
-for that listing, in order — rather than a separate reasoning trace to maintain.
+`explain case` reads straight off the artifact log (§5) -- one section per agent artifact
+for that listing, in order -- rather than a separate reasoning trace to maintain.
 
-**Example — escalation and appeal (§8)**
+**Example -- escalation and appeal (§8)**
 ```
 > this one looks like it needs a second opinion, escalate it
 
@@ -712,10 +712,10 @@ suspend_seller("SUP-1234", "Repeated policy violations across multiple listings.
 Seller SUP-1234 → SUSPENDED
 ```
 Escalation and appeals reuse `APPROVED`/`REJECTED` as the actual outcome status
-rather than separate terminal states (§8.2) — the artifact log's `version` field
+rather than separate terminal states (§8.2) -- the artifact log's `version` field
 (`"moderator-appeal-resolution"`) is what distinguishes an appeal outcome from a
 plain decision, not a different status value. There is no seller-facing surface in
-this system (§8.1) — `request_appeal` relays an appeal that reached a moderator
+this system (§8.1) -- `request_appeal` relays an appeal that reached a moderator
 through some other channel, it isn't triggered by the seller directly.
 
 **Tools**
@@ -724,20 +724,20 @@ through some other channel, it isn't triggered by the seller directly.
 | `list_pending()` | `{ limit?, category? }` | `Listing[]` |
 | `get_listing(listingId)` | `{ listingId }` | full document + agent outputs |
 | `explain_case(listingId)` | `{ listingId }` | all artifacts for the listing, per-agent |
-| `approve_listing(listingId, moderatorId?, note?)` | — | updated status |
-| `reject_listing(listingId, moderatorId?, reason)` | — | updated status |
-| `escalate_case(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, PENDING_REVIEW only) |
-| `request_appeal(listingId, reason, moderatorId?)` | — | updated status (§8.2/§8.4, REJECTED only) |
+| `approve_listing(listingId, moderatorId?, note?)` | -- | updated status |
+| `reject_listing(listingId, moderatorId?, reason)` | -- | updated status |
+| `escalate_case(listingId, reason, moderatorId?)` | -- | updated status (§8.2/§8.4, PENDING_REVIEW only) |
+| `request_appeal(listingId, reason, moderatorId?)` | -- | updated status (§8.2/§8.4, REJECTED only) |
 | `resolve_appeal(listingId, decision, reason, moderatorId?)` | `{ decision: APPROVE\|REJECT }` | updated status (§8.2/§8.4, APPEAL_REQUESTED only) |
-| `list_seller_cases(sellerId)` | — | `Listing[]` (§8.4) |
-| `suspend_seller(sellerId, reason, moderatorId?)` | — | updated seller status (§8.4, ACTIVE only) |
-| `reinstate_seller(sellerId, reason, moderatorId?)` | — | updated seller status (§8.4, SUSPENDED only) |
+| `list_seller_cases(sellerId)` | -- | `Listing[]` (§8.4) |
+| `suspend_seller(sellerId, reason, moderatorId?)` | -- | updated seller status (§8.4, ACTIVE only) |
+| `reinstate_seller(sellerId, reason, moderatorId?)` | -- | updated seller status (§8.4, SUSPENDED only) |
 | `search_policy(query)` | `{ query }` | matching rule(s) |
-| `find_similar_cases(listingId, k?)` | — | `Case[]` |
-| `show_images(listingId)` | — | image URLs |
-| `rerun_analysis(listingId, agent?)` | — | new agent output |
-| `record_decision(listingId, decision, reason)` | — | audit entry (§5 schema) |
-| `whoami(moderatorId?)` | — | moderator's own registry entry |
+| `find_similar_cases(listingId, k?)` | -- | `Case[]` |
+| `show_images(listingId)` | -- | image URLs |
+| `rerun_analysis(listingId, agent?)` | -- | new agent output |
+| `record_decision(listingId, decision, reason)` | -- | audit entry (§5 schema) |
+| `whoami(moderatorId?)` | -- | moderator's own registry entry |
 | `get_stats(since?)` | `{ since?: ISO timestamp }` | accuracy/performance report (§6's stats note below, docs/decisions/0027) |
 
 Planned additions (escalation/appeals/seller accounts, not yet implemented) are
@@ -765,21 +765,21 @@ For surveying multiple listings rather than deep-diving one, `--queue` (optional
 title, status, decision, confidence, policy rules, and an image link per row --
 backed by one persistent image server covering every listing's images at once,
 instead of restarting a server per listing. Added after real moderator feedback that
-the per-listing flow was too much friction with no decision/confidence visibility —
+the per-listing flow was too much friction with no decision/confidence visibility --
 see `docs/decisions/0015-inspect-listing-queue-table.md`. A listing whose image can't
 be fetched (blocked by `images.py`'s path/bucket allowlist, `docs/decisions/0033`, or
-any other fetch failure) doesn't abort the survey — that listing's row shows `⚠N
+any other fetch failure) doesn't abort the survey -- that listing's row shows `⚠N
 unavailable` instead of an image link, and every other listing still renders
 (`docs/decisions/0034`, found by `/code-review`: an earlier version let one bad image
 crash the whole table).
 
 **Moderator identity.** `moderatorId` is checked against a `moderators` table
-(`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,
+(`moderator_id`, `name`, `active`) -- authorization, not authentication: no passwords,
 no tokens, no login flow, because the CLI is a tool layer driven by a trusted operator
 through Claude Code (§2 note in §6's intro), not a network-exposed service with
 untrusted callers. `approve_listing`/`reject_listing`/`record_decision` reject an
 unknown or inactive `moderatorId` outright. When omitted, `moderatorId` defaults to the
-`MODERATOR_ID` environment variable (same convention as git's `user.name`) — still
+`MODERATOR_ID` environment variable (same convention as git's `user.name`) -- still
 validated against the table, an unset/unknown/inactive default is still rejected, just
 without needing to pass it on every call. `whoami()` returns the resolved moderator's
 own registry row, letting a moderator confirm their identity/active status before
@@ -802,20 +802,20 @@ is the closest available accuracy proxy, not a precision/recall number; see
 real-call eval harnesses that test against corpora with actually-known outcomes
 instead.
 
-`approve_listing`/`reject_listing` are thin wrappers over `record_decision` — all three
+`approve_listing`/`reject_listing` are thin wrappers over `record_decision` -- all three
 append a new `DecisionAgent` artifact and move the listing to the matching terminal
 status; the two convenience wrappers just fix `decision` to `APPROVE`/`REJECT` and set
 `moderator` from `moderatorId`.
 
 **`find_similar_cases`** ranks by real semantic similarity: a text embedding
-(title + description, model `nvidia/nemotron-3-embed-1b` — originally
+(title + description, model `nvidia/nemotron-3-embed-1b` -- originally
 `nvidia/llama-nemotron-embed-1b-v2`, NVIDIA removed that model from its catalog,
-`docs/decisions/0025`/`0026` — `embeddings.py`) is
+`docs/decisions/0025`/`0026` -- `embeddings.py`) is
 computed for each listing during `pipeline.run_fusion` and stored in Postgres via
 `pgvector` (`listing_embeddings` table, `embedding halfvec(2048)` with an HNSW index)
 via a scalar-subquery lookup of the target embedding, chosen because a self-join form
 was confirmed via real `EXPLAIN` to never use the index at all (`docs/decisions/0016`
-— also documents the half-precision trade-off). Replaces the category+rule-overlap
+ -- also documents the half-precision trade-off). Replaces the category+rule-overlap
 heuristic this project shipped first (`docs/decisions/0005`, superseded by
 `docs/decisions/0010`). A listing that hasn't been through the pipeline yet has no
 embedding and `find_similar_cases` raises rather than silently returning nothing.

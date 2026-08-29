@@ -1,5 +1,5 @@
 """
-Intake Agent — maps a raw listings row to the canonical document every other agent
+Intake Agent -- maps a raw listings row to the canonical document every other agent
 consumes. See SPEC.md §3.1. Pure data mapping, no model call.
 """
 

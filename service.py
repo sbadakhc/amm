@@ -1,5 +1,5 @@
 """
-Poller service — the concrete implementation of SPEC.md §7's "workflow picks it up
+Poller service -- the concrete implementation of SPEC.md §7's "workflow picks it up
 and triggers in-process." Continuously claims PENDING_MODERATION listings and runs
 them through the pipeline, and periodically sweeps stale PROCESSING claims (§2.1).
 
