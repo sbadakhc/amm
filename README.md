@@ -36,22 +36,34 @@ export DATABASE_URL="postgresql://amm:amm@127.0.0.1:55432/moderator"
 python3 generate_synthetic_data.py # seeds 5 demo listings + 3 demo moderators
 ```
 
-## Run
+## Commands
 
-```
-/status   # confirms every model the pipeline needs is actually callable right now
-/run      # claims whatever's PENDING_MODERATION and runs it through the pipeline
-```
+Everything below is driven by talking to Claude Code — no separate CLI to learn.
+These are the slash commands behind that conversation; say the plain-English version
+and Claude Code calls them for you, or invoke them directly.
 
-Or as a long-running service instead of one-shot batches:
+| Command | What it does |
+|---|---|
+| `/status` | Confirms every NVIDIA model the pipeline depends on is actually callable right now — run this first |
+| `/run` | Claims whatever's `PENDING_MODERATION` and runs it through the pipeline |
+| `/inspect --queue` | Table view of the whole review queue — status, decision, confidence, policy rules, image links |
+| `/inspect <listingId>` | Deep-dive one case — full text, every agent's findings, and its images |
+| `/stats` | Pipeline accuracy/performance report — decision distribution, moderator override rate, latency, failures |
+
+Recording a decision isn't a slash command — just say what you want ("approve it",
+"reject it, counterfeit confirmed", "escalate this one") and Claude Code calls the
+matching tool (`approve_listing`, `reject_listing`, `escalate_case`, `request_appeal`,
+`resolve_appeal`).
+
+For continuous processing instead of one-shot `/run` batches:
 
 ```bash
 python3 service.py
 ```
 
-Then work the review queue — see below. For the full worked example (a moderator's
-actual morning, command by command with real output), see
-[Example: a moderator's morning](#example-a-moderators-morning).
+See [Example: a moderator's morning](#example-a-moderators-morning) for all of these
+used together with real captured output, or
+[Working the review queue](#working-the-review-queue) for `/inspect`'s full detail.
 
 ## Example: a moderator's morning
 
