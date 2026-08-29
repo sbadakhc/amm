@@ -20,10 +20,24 @@ of letting it hang or fail confusingly mid-run.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
+import images
 from scripts.preflight_check import check_all
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _allow_test_fixture_images_root(monkeypatch):
+    """docs/decisions/0033: fetch_image_bytes only reads file:// paths inside
+    images.LOCAL_IMAGE_ROOTS (default: this project's own images/ dir). Test fixture
+    images live under tests/fixtures/, outside that default -- autouse here so every
+    test file using FIXTURE_IMAGE-style file:// paths doesn't need its own copy of
+    this, without widening the real default (which would defeat the fix)."""
+    monkeypatch.setattr(images, "LOCAL_IMAGE_ROOTS", [FIXTURES_DIR.resolve()])
 
 # Hard dependencies only -- mistral-nemotron is deliberately excluded even though both
 # suites can trigger a call to it (Safety Agent's prize-scam check), because that call
