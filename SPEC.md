@@ -275,7 +275,11 @@ instructions" framing. Confirmed via a real adversarial test this is defense-in-
 not a guarantee: injected text in a description still fooled the text-check model on
 some trials even with wrapping in place, though at sharply reduced confidence (99.66%
 → 29-70% across repeated trials) — see `agents/policy_agent.py`'s independent INJ001
-detector (§3.5) for the complementary, non-LLM containment layer. With more than one
+detector (§3.5) for the complementary, non-LLM containment layer.
+`wrap_untrusted` escapes `<`/`>` in the untrusted text before delimiting it
+(`docs/decisions/0034`, found by `/code-review`) — without this, text containing a
+literal `</label>`-shaped substring could close the delimited block early and defeat
+the wrapping's own purpose. With more than one
 image, a check is `consistent` if *any* image
 confirms it. `inconsistencyScore` is not a separate judgment call — it's the mean, over
 all checks, of the probability mass the model itself placed on the "inconsistent"
@@ -762,7 +766,12 @@ title, status, decision, confidence, policy rules, and an image link per row --
 backed by one persistent image server covering every listing's images at once,
 instead of restarting a server per listing. Added after real moderator feedback that
 the per-listing flow was too much friction with no decision/confidence visibility —
-see `docs/decisions/0015-inspect-listing-queue-table.md`.
+see `docs/decisions/0015-inspect-listing-queue-table.md`. A listing whose image can't
+be fetched (blocked by `images.py`'s path/bucket allowlist, `docs/decisions/0033`, or
+any other fetch failure) doesn't abort the survey — that listing's row shows `⚠N
+unavailable` instead of an image link, and every other listing still renders
+(`docs/decisions/0034`, found by `/code-review`: an earlier version let one bad image
+crash the whole table).
 
 **Moderator identity.** `moderatorId` is checked against a `moderators` table
 (`moderator_id`, `name`, `active`) — authorization, not authentication: no passwords,

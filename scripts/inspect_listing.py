@@ -90,6 +90,14 @@ def print_listing_text(listing_id: str) -> None:
 
 
 def fetch_images_to_temp(listing_id: str) -> list[str]:
+    """A failed image fetch -- blocked by the docs/decisions/0033/0034 path/bucket
+    allowlist, a stale reference to a file that's since been deleted, an S3 error,
+    anything -- is a real, moderator-relevant signal, not a crash: print it and skip
+    that one image, rather than letting one bad URL abort inspection of the whole
+    listing. Catches broadly (not just the allowlist's ValueError) deliberately --
+    this is a display tool, and every failure mode here means the same thing to a
+    moderator ("this image couldn't be shown, here's why"), not something to
+    special-case by exception type."""
     data = get_listing(listing_id)
     images = data["listing"]["images"]
     if not images:
@@ -99,7 +107,11 @@ def fetch_images_to_temp(listing_id: str) -> list[str]:
     paths = []
     for i, img in enumerate(images):
         url = img["url"]
-        content, mime = fetch_image_bytes(url)
+        try:
+            content, mime = fetch_image_bytes(url)
+        except Exception as e:
+            print(f"  [image {i} unavailable: {e}]")
+            continue
         ext = mime.split("/")[-1] if "/" in mime else "png"
         out_path = tmp_dir / f"image-{i}.{ext}"
         out_path.write_bytes(content)
@@ -175,8 +187,19 @@ def print_queue_table(statuses: list[str] | None = None) -> None:
         payload = decision["payload"] if decision else None
 
         image_names = []
+        unavailable_count = 0
         for i, img in enumerate(row["images"]):
-            content, mime = fetch_image_bytes(img["url"])
+            try:
+                content, mime = fetch_image_bytes(img["url"])
+            except Exception:
+                # docs/decisions/0033/0034 -- a failed image fetch (blocked by the
+                # path/bucket allowlist, a stale reference, an S3 error, anything)
+                # must not abort the whole queue survey over one listing; it's
+                # flagged in the table instead (a real signal, not noise to hide)
+                # and every other listing still renders. Broad on purpose, same
+                # reasoning as fetch_images_to_temp above.
+                unavailable_count += 1
+                continue
             ext = mime.split("/")[-1] if "/" in mime else "png"
             fname = f"{listing_id}-{i}.{ext}"
             (tmp_dir / fname).write_bytes(content)
@@ -191,6 +214,7 @@ def print_queue_table(statuses: list[str] | None = None) -> None:
                 "confidence": f"{payload['confidence']:.2f}" if payload else "-",
                 "rules": ", ".join(payload["policyRules"]) if payload and payload["policyRules"] else "-",
                 "images": image_names,
+                "unavailable_count": unavailable_count,
             }
         )
 
@@ -200,6 +224,8 @@ def print_queue_table(statuses: list[str] | None = None) -> None:
     print("|---|---|---|---|---|---|---|")
     for r in table_rows:
         links = " ".join(f"[{i}](http://localhost:{port}/{name})" for i, name in enumerate(r["images"]))
+        if r["unavailable_count"]:
+            links = f"{links} ⚠{r["unavailable_count"]} unavailable".strip()
         print(
             f"| {r['listing_id']} | {r['title']} | {r['status']} | {r['decision']} | "
             f"{r['confidence']} | {r['rules']} | {links or '-'} |"
