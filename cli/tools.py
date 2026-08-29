@@ -43,6 +43,15 @@ def explain_case(listing_id: str) -> list[dict]:
     return db.get_artifacts(listing_id)
 
 
+def get_stats(since: str | None = None) -> dict:
+    """`get_stats(since?)` (§6, docs/decisions/0027) — automated-pipeline accuracy and
+    performance signals: decision distribution, moderator override rate, confidence,
+    latency, failure rate, policy rule hit counts. Thin passthrough to `db.get_stats`
+    -- see there for what each field means and how it's derived from the artifact
+    log. `since` is an optional ISO timestamp; omitted means all-time."""
+    return db.get_stats(since=since)
+
+
 def show_images(listing_id: str) -> list[str]:
     """`show_images(listingId)` (§6)."""
     row = db.get_listing_row(listing_id)

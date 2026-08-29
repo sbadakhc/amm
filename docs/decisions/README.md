@@ -26,3 +26,11 @@ covered by SPEC.md.
 | [0019](0019-safety-agent-low-confidence-retry.md) | Safety Agent retries a low-confidence safe verdict once |
 | [0020](0020-prize-advance-fee-scam-targeted-check.md) | Targeted second-opinion check for prize/advance-fee scams |
 | [0021](0021-fraud-eval-harness.md) | Checked-in real-call fraud eval harness, opt-in, aggregate thresholds |
+| [0022](0022-prize-scam-check-timeout-fallback.md) | Prize-scam second-opinion check fails open on timeout, not blocking |
+| [0023](0023-ebay-titles-false-positive-fixture.md) | Real eBay listing titles as a local-only (never-committed) false-positive fixture |
+| [0024](0024-symmetric-low-confidence-retry.md) | Low-confidence retry extended to the unsafe direction (found via 0023's eval) |
+| [0025](0025-vision-model-end-of-life-replacement.md) | Vision model end-of-life: replace nemotron-nano-12b-v2-vl with meta/llama-3.2-11b-vision-instruct |
+| [0026](0026-preflight-model-check.md) | Preflight model check before real-call tests -- distinguishes permanent (GONE) from transient (UNREACHABLE) failures |
+| [0027](0027-pipeline-stats.md) | Pipeline accuracy/performance stats from the existing artifact log -- decision distribution, moderator override rate, latency, failures |
+| [0028](0028-consistency-agent-timeout-fallback.md) | Consistency Agent checks fail open on timeout, not blocking -- skipped checks excluded from inconsistencyScore, not counted either way |
+| [0029](0029-evidence-agent-timeout-fallback.md) | Evidence Agent extraction fails open on timeout, not blocking -- skipped images excluded from brandMismatch, not counted either way |

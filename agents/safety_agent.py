@@ -7,11 +7,14 @@ Agent (§3.5) needs a category to map to a specific rule (W001 vs D001 etc).
 """
 
 import json
+import logging
 import math
 import os
 from datetime import datetime, timezone
 
 import requests
+
+logger = logging.getLogger("amm.safety_agent")
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODEL = "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"
@@ -21,6 +24,16 @@ MODEL = "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"
 # Consistency Agent, not the safety-guard classifier itself.
 PRIZE_SCAM_CHECK_MODEL = "mistralai/mistral-nemotron"
 PRIZE_SCAM_CATEGORY = "Prize/Advance-Fee Scam"
+
+# Confirmed real-call latency for this check is normally well under 2s. A much
+# shorter timeout than the primary classifier's (30s) is deliberate: this is an
+# optional second opinion, not a required verdict, so on a degraded/hung backend we'd
+# rather fail open (skip the check, keep the primary classifier's verdict) than block
+# the whole pipeline run on one flaky model endpoint. Confirmed live 2026-08-29:
+# integrate.api.nvidia.com's mistral-nemotron backend accepted the TLS connection and
+# request but never sent a response at all -- no error, no timeout of its own -- so
+# this agent must impose one rather than trust the backend to.
+PRIZE_SCAM_CHECK_TIMEOUT = float(os.environ.get("PRIZE_SCAM_CHECK_TIMEOUT", "10"))
 
 # A "safe" verdict below this confidence gets one retry (docs/decisions/0019).
 # Empirically every genuinely-safe real-call test case observed confidence >= 0.70;
@@ -61,7 +74,7 @@ def _classify(text: str) -> dict:
     return {"unsafe": unsafe, "categories": categories, "confidence": confidence}
 
 
-def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float]:
+def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float] | None:
     """Targeted second-opinion check (docs/decisions/0020): the safety-guard
     classifier has a confirmed systematic blind spot for prize/lottery/advance-fee
     scams ("you won a prize, pay a fee to claim it") -- real-call testing found it
@@ -71,7 +84,12 @@ def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float]:
     text model catches it far more reliably (5/5 vs. 3/5 for a keyword heuristic, on
     the same real-call test corpus) because it reasons about intent rather than
     matching phrasing. Retries once on a malformed (non-true/false) response, same
-    failure mode Consistency Agent's `_post_for_verdict` already handles."""
+    failure mode Consistency Agent's `_post_for_verdict` already handles.
+
+    Returns None if the check couldn't complete (timeout, connection failure, or two
+    malformed responses in a row) -- the caller treats that as "skip", not "not a
+    scam": the primary classifier's verdict stands unchanged rather than either
+    inventing a violation or blocking on a degraded backend."""
     prompt = (
         "Does this marketplace listing describe the recipient receiving something of "
         "value (a prize, lottery winnings, an inheritance, a free item) that is "
@@ -81,29 +99,34 @@ def _check_prize_advance_fee_scam(text: str) -> tuple[bool, float]:
     )
     last_error = None
     for _attempt in range(2):
-        resp = requests.post(
-            NVIDIA_API_URL,
-            headers={
-                "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": PRIZE_SCAM_CHECK_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 10,
-                "logprobs": True,
-                "top_logprobs": 1,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.post(
+                NVIDIA_API_URL,
+                headers={
+                    "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": PRIZE_SCAM_CHECK_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 10,
+                    "logprobs": True,
+                    "top_logprobs": 1,
+                },
+                timeout=PRIZE_SCAM_CHECK_TIMEOUT,
+            )
+            resp.raise_for_status()
+        except requests.exceptions.RequestException:
+            logger.warning("prize-scam second-opinion check unavailable, skipping", exc_info=True)
+            return None
         content = resp.json()["choices"][0]["logprobs"]["content"]
         for tok in content:
             word = tok["token"].strip().strip("▁").lower()
             if word in ("true", "false"):
                 return word == "true", math.exp(tok["logprob"])
         last_error = ValueError(f"No true/false token found in {content}")
-    raise last_error
+    logger.warning("prize-scam second-opinion check malformed twice, skipping: %s", last_error)
+    return None
 
 
 def run_safety_agent(canonical_doc: dict) -> dict:
@@ -111,13 +134,22 @@ def run_safety_agent(canonical_doc: dict) -> dict:
     Runs the Safety Agent over a canonical listing document (§3.1) and returns a
     SafetyAgent artifact (§5) ready to append to the `artifacts` table.
 
-    A low-confidence "safe" verdict gets one retry (docs/decisions/0019) -- confirmed
-    via real calls that the model occasionally emits "safe" with near-zero confidence
-    on genuinely fraudulent text (a well-formed but wrong answer, unlike Consistency
-    Agent's rambling-response failure mode); a fresh sample resolves this more often
-    than not. If the retry also comes back safe, the higher-confidence of the two safe
-    verdicts wins -- retrying never *invents* a violation, it only gives a low-trust
-    safe verdict a second chance to be corrected.
+    A low-confidence verdict gets one retry (docs/decisions/0019, extended by 0024):
+    confirmed via real calls that the model occasionally emits a well-formed but wrong
+    verdict at near-zero confidence, in *either* direction -- "safe" on genuinely
+    fraudulent text (0019's original finding), or "unsafe" with spurious categories on
+    genuinely clean text (0024, found via 0023's eBay false-positive eval). A fresh
+    sample resolves this more often than not.
+
+    The two directions are handled asymmetrically on purpose:
+    - Low-confidence "safe": prefer the retry if it comes back unsafe at all, or if
+      it's a more confident safe verdict. This deliberately biases toward catching
+      fraud the first call missed (0019) -- retrying never *invents* a violation from
+      a safe-then-safe pair, it only gives a low-trust safe verdict a second chance.
+    - Low-confidence "unsafe": no such bias -- keep whichever of the two calls the
+      model was more confident in (0024). Preferring "unsafe" here the same way would
+      make the retry pointless for its purpose (correcting a spurious flag), since the
+      first call is already unsafe.
 
     A listing that's still "safe" after that gets one more check: a targeted
     prize/advance-fee scam question (docs/decisions/0020), since this is a confirmed
@@ -127,19 +159,24 @@ def run_safety_agent(canonical_doc: dict) -> dict:
     """
     text = f"{canonical_doc['title']}\n{canonical_doc['description']}"
     result = _classify(text)
-    if not result["unsafe"] and result["confidence"] < SAFE_RETRY_CONFIDENCE_THRESHOLD:
+    if result["confidence"] < SAFE_RETRY_CONFIDENCE_THRESHOLD:
         retry = _classify(text)
-        if retry["unsafe"] or retry["confidence"] > result["confidence"]:
+        if not result["unsafe"]:
+            if retry["unsafe"] or retry["confidence"] > result["confidence"]:
+                result = retry
+        elif retry["confidence"] > result["confidence"]:
             result = retry
 
     violations = list(result["categories"]) if result["unsafe"] else []
     confidence = result["confidence"]
 
     if not result["unsafe"]:
-        is_prize_scam, prize_conf = _check_prize_advance_fee_scam(text)
-        if is_prize_scam:
-            violations = [PRIZE_SCAM_CATEGORY]
-            confidence = prize_conf
+        prize_check = _check_prize_advance_fee_scam(text)
+        if prize_check is not None:
+            is_prize_scam, prize_conf = prize_check
+            if is_prize_scam:
+                violations = [PRIZE_SCAM_CATEGORY]
+                confidence = prize_conf
 
     unsafe = bool(violations)
     if unsafe:
