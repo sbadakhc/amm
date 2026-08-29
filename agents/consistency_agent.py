@@ -18,12 +18,14 @@ import requests
 
 try:
     from images import fetch_image_bytes
+    from prompt_safety import wrap_untrusted
 except ImportError:  # running as a script, not a package -- repo root isn't on sys.path
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from images import fetch_image_bytes
+    from prompt_safety import wrap_untrusted
 
 logger = logging.getLogger("amm.consistency_agent")
 
@@ -255,7 +257,7 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
         "than the title (a direct contradiction)? If the description does not "
         "mention a specific competing product name, that is NOT a contradiction. "
         "Answer with exactly one word: true or false.\n"
-        f"Title: {title}\nDescription: {description}"
+        f"{wrap_untrusted('title', title)}\n{wrap_untrusted('description', description)}"
     )
     if title_vs_description is not None:
         _record("title_vs_description", (not title_vs_description[0], title_vs_description[1]))
@@ -277,7 +279,7 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
         results = [
             _vision_check(
                 "Does this image visually match what this product description "
-                f"says the product is? Description: {description}\n"
+                f"says the product is?\n{wrap_untrusted('description', description)}\n"
                 "Answer with exactly one word: true or false.",
                 img,
             )
@@ -288,8 +290,9 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
         if declared_brand:
             results = [
                 _vision_check(
-                    f"Is the brand '{declared_brand}' visible in this image (logo, "
-                    "packaging text, etc)? Answer with exactly one word: true or false.",
+                    f"Is the brand named below visible in this image (logo, packaging "
+                    f"text, etc)?\n{wrap_untrusted('brand', declared_brand)}\n"
+                    "Answer with exactly one word: true or false.",
                     img,
                 )
                 for img in images
@@ -298,8 +301,9 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
 
         results = [
             _vision_check(
-                "Does this image show a product belonging to the category "
-                f"'{category_id}'? Answer with exactly one word: true or false.",
+                "Does this image show a product belonging to the category named "
+                f"below?\n{wrap_untrusted('category', category_id)}\n"
+                "Answer with exactly one word: true or false.",
                 img,
             )
             for img in images

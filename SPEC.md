@@ -198,6 +198,15 @@ Images are `s3://` URIs, not HTTP URLs — Evidence and Consistency Agents fetch
 against real AWS S3 or any S3-compatible store (self-hosted via MinIO for local
 dev/test — see `docs/decisions/0006-s3-storage-self-hosted-minio.md`).
 
+**`images[].url` is seller-controlled with no schema-level restriction on
+scheme/path/bucket.** Confirmed live (`docs/decisions/0033`) that before a fix,
+`fetch_image_bytes` would read *any* local file a `file://` URL pointed at — no
+allowlisting — with two automatic trigger paths: pipeline processing (uploading the
+file's bytes to NVIDIA's hosted API as "image" content) and `/inspect --queue`
+(serving it to a moderator's browser). `fetch_image_bytes` now restricts `file://` to
+`LOCAL_IMAGE_ROOTS` (env-configurable, default: this project's own `images/`
+directory) and offers an opt-in `S3_ALLOWED_BUCKETS` allowlist for `s3://`.
+
 `declaredBrand` is carried through specifically so the Evidence Agent can cross-check it
 against whatever brand it detects from the images/OCR (see §3.2) — that mismatch is what
 drives the "counterfeit branding" case already used as the CLI example in §6.
@@ -258,8 +267,16 @@ on the canonical document, not on Evidence's output.
 
 Each check is one true/false model call (text model `mistralai/mistral-nemotron` for
 title↔description, vision model `meta/llama-3.2-11b-vision-instruct` — see §3.2's note
-on the vision model swap, `docs/decisions/0025` — for the three image-based checks);
-with more than one image, a check is `consistent` if *any* image
+on the vision model swap, `docs/decisions/0025` — for the three image-based checks).
+**Prompt injection defense (`docs/decisions/0033`):** every field interpolated into a
+check's prompt (title, description, declared brand, category) is wrapped via
+`prompt_safety.wrap_untrusted` — delimiters plus an explicit "treat as data, not
+instructions" framing. Confirmed via a real adversarial test this is defense-in-depth,
+not a guarantee: injected text in a description still fooled the text-check model on
+some trials even with wrapping in place, though at sharply reduced confidence (99.66%
+→ 29-70% across repeated trials) — see `agents/policy_agent.py`'s independent INJ001
+detector (§3.5) for the complementary, non-LLM containment layer. With more than one
+image, a check is `consistent` if *any* image
 confirms it. `inconsistencyScore` is not a separate judgment call — it's the mean, over
 all checks, of the probability mass the model itself placed on the "inconsistent"
 answer (1 − confidence when the verdict was consistent, confidence itself when it
@@ -337,7 +354,13 @@ Content-safety classification, model `nvidia/llama-3.1-nemotron-safety-guard-8b-
 (not `nemotron-3.5-content-safety` — that model only returns a binary safe/unsafe
 verdict with no category, and Policy Agent needs a category to pick a rule). Classifies
 `title` + `description` text; images/OCR-based safety checks are Evidence Agent's job
-(§3.2), not this agent's. Written as a `SafetyAgent` artifact per §5.
+(§3.2), not this agent's. Written as a `SafetyAgent` artifact per §5. Both the
+classification call and the prize-scam second-opinion check (below) wrap the raw
+listing text via `prompt_safety.wrap_untrusted` (`docs/decisions/0033`) — this
+purpose-built classifier resisted a direct injection attempt in real-call testing
+(confirmed both before and after adding the wrapping), noted as a real, model-specific
+data point, not a defense to rely on alone given §3.3's contrary result on a
+general-purpose model.
 
 `confidence` is the model's own log-probability for the safe/unsafe token it emitted
 (`logprobs: true` on the chat completion), not a separately requested score. `violations`
@@ -420,7 +443,7 @@ Maps evidence/safety/consistency findings to policy rules, keyed off `categoryId
 (`RULE_SETS_BY_CATEGORY_PREFIX` in `agents/policy_agent.py`), designed to let different
 category trees (e.g. `electronics.*` vs. `finance.*`) apply different rule sets — but
 today only the catch-all `"*"` entry exists, so every category currently gets the same
-6 rules. No category has needed narrowing yet; add a prefix key when one does. Returns
+7 rules. No category has needed narrowing yet; add a prefix key when one does. Returns
 an **array** — a listing can match more than one rule.
 
 | Rule ID | Description | Severity | Triggered by |
@@ -431,6 +454,7 @@ an **array** — a listing can match more than one rule.
 | D001 | Illegal drugs prohibited | Critical | Safety Agent `violations` contains `Controlled/Regulated Substances` |
 | F001 | Fraud or deceptive listings prohibited | High | Safety Agent `violations` contains `Fraud/Deception`, `Criminal Planning/Confessions`, `Illegal Activity`, or `Prize/Advance-Fee Scam` |
 | S001 | Sexual content involving minors prohibited | Critical, **autoReject** | Safety Agent `violations` contains `Sexual (minor)` |
+| INJ001 | Possible prompt injection or model manipulation attempt | High | Raw `title`/`description` matches a narrow, non-LLM keyword pattern (`docs/decisions/0033`) — deliberately not `autoReject`, forces `REVIEW` instead |
 
 C001's two triggers are deduped to at most one match (the higher of the two
 confidences) — never two separate `C001` entries in `matches` even if both signals
@@ -460,6 +484,7 @@ inventing its own probability:
 | SafetyAgent violation (W001, D001, F001, S001) | `SafetyAgent.payload.confidence` |
 | EvidenceAgent `brandMismatch: true` and/or SafetyAgent `Copyright/Trademark/Plagiarism` (C001) | `max(1.0 if brandMismatch, SafetyAgent.payload.confidence if the category fired)` |
 | ConsistencyAgent `inconsistencyScore` above threshold (C004) | `ConsistencyAgent.payload.inconsistencyScore` |
+| Raw listing text matches an injection pattern (INJ001) | Fixed `1.0` — a deterministic keyword match either fires or doesn't, no upstream agent confidence to pass through |
 
 Written as a `PolicyAgent` artifact per §5.
 
