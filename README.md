@@ -115,8 +115,6 @@ cleanly, nothing crashed or hung.
 
 ```
 > /inspect --queue
-```
-```
 | Listing | Title | Status | Decision | Confidence | Policy Rules | Images |
 |---|---|---|---|---|---|---|
 | LST-FA2A87 | Apple iPhone 16 Pro Max 256GB | PENDING_REVIEW | REVIEW | 0.76 | - | [0](...) |
@@ -133,8 +131,6 @@ before the others.
 
 ```
 > explain case LST-2C61FB
-```
-```
 -- EvidenceAgent --
   ocr: ['SMARTPHONE PRO 16', '256GB STORAGE']
   brandsDetected: []
@@ -162,8 +158,6 @@ Brand Trading Co." Easy call.
 
 ```
 > reject it, no brand corroboration on packaging, counterfeit confirmed
-```
-```
 REJECTED | LST-2C61FB
 ```
 ```
