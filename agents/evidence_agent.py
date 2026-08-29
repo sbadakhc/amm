@@ -8,6 +8,7 @@ brand(s) against the canonical document's declaredBrand and flags a mismatch.
 
 import base64
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -22,8 +23,18 @@ except ImportError:  # running as a script, not a package -- repo root isn't on 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from images import fetch_image_bytes
 
+logger = logging.getLogger("amm.evidence_agent")
+
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-MODEL = "nvidia/nemotron-nano-12b-v2-vl"
+# nvidia/nemotron-nano-12b-v2-vl reached NVIDIA end-of-life 2026-08-26 and is no
+# longer callable (410 Gone) -- see docs/decisions/0025.
+MODEL = "meta/llama-3.2-11b-vision-instruct"
+
+# Confirmed real-call latency for a single image's extraction is normally a few
+# seconds (docs/decisions/0025's verification), not the old 60s. Shorter, with a
+# retry, same reasoning as the other agents' timeout fallbacks (0022/0028): a hung
+# backend gets a bounded wait, not an unbounded one. See docs/decisions/0029.
+EVIDENCE_EXTRACTION_TIMEOUT = float(os.environ.get("EVIDENCE_EXTRACTION_TIMEOUT", "20"))
 
 EXTRACTION_PROMPT = (
     "List every object you see, transcribe all visible text exactly (OCR), and name "
@@ -56,40 +67,67 @@ def _parse_json_object(text: str) -> dict:
     return obj
 
 
-def _extract_from_image(url: str) -> dict:
+def _extract_from_image(url: str) -> dict | None:
+    """Extracts objects/OCR/brands/etc from one image. Retries once on a malformed
+    (non-JSON) response -- same "fresh sample resolves stochastic non-compliance"
+    reasoning as the other agents' retries. Returns None -- treated as "skip this
+    image", not "no objects/brands found" -- on a timeout/connection failure, or two
+    malformed responses in a row (docs/decisions/0029, same fail-open philosophy as
+    0022/0028): this image's extraction failing must not silently read as "packaging
+    confirmed nothing," which would manufacture a brandMismatch that was never
+    actually checked."""
     b64, mime = _load_image_b64(url)
-    resp = requests.post(
-        NVIDIA_API_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODEL,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": EXTRACTION_PROMPT},
+    last_error = None
+    for _attempt in range(2):
+        try:
+            resp = requests.post(
+                NVIDIA_API_URL,
+                headers={
+                    "Authorization": f"Bearer {os.environ['NVIDIA_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": MODEL,
+                    "messages": [
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{b64}"},
-                        },
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": EXTRACTION_PROMPT},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                                },
+                            ],
+                        }
                     ],
-                }
-            ],
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    return _parse_json_object(content)
+                },
+                timeout=EVIDENCE_EXTRACTION_TIMEOUT,
+            )
+            resp.raise_for_status()
+        except requests.exceptions.RequestException:
+            logger.warning("evidence extraction unavailable for %s, skipping", url, exc_info=True)
+            return None
+        content = resp.json()["choices"][0]["message"]["content"]
+        try:
+            return _parse_json_object(content)
+        except ValueError as e:  # covers json.JSONDecodeError and the "no { found" case
+            last_error = e
+    logger.warning("evidence extraction malformed twice for %s, skipping: %s", url, last_error)
+    return None
 
 
 def run_evidence_agent(canonical_doc: dict) -> dict:
     """
     Runs the Evidence Agent over a canonical listing document (§3.1) and returns an
     EvidenceAgent artifact (§5) ready to append to the `artifacts` table.
+
+    Each image's extraction can independently be skipped (docs/decisions/0029) if its
+    model call failed -- landing in `imagesSkipped`, not contributing objects/brands/
+    OCR/etc. If *every* attempted image was skipped, `brandMismatch` stays `false`
+    regardless of `declaredBrand` -- the same fail-open principle as 0022/0024/0028:
+    "couldn't check" must not manufacture a violation. This is deliberately different
+    from the *zero-images* case below, where a mismatch is still flagged: no images
+    at all is itself a real signal about the listing, not an infrastructure failure.
     """
     objects: set[str] = set()
     brands: set[str] = set()
@@ -98,9 +136,14 @@ def run_evidence_agent(canonical_doc: dict) -> dict:
     serial_numbers: list[str] = []
     expiry_date = None
     country_of_origin = None
+    images_skipped: list[str] = []
 
-    for url in canonical_doc.get("images", []):
+    attempted_images = canonical_doc.get("images", [])
+    for url in attempted_images:
         extracted = _extract_from_image(url)
+        if extracted is None:
+            images_skipped.append(url)
+            continue
         objects.update(o.strip() for o in extracted.get("objects", []) if o.strip())
         brands.update(b.strip() for b in extracted.get("brands", []) if b.strip())
         ocr.extend(extracted.get("ocr", []))
@@ -115,11 +158,14 @@ def run_evidence_agent(canonical_doc: dict) -> dict:
 
     declared_brand = (canonical_doc.get("declaredBrand") or "").strip().lower()
     detected_brands_lower = {b.lower() for b in brands}
+    all_attempted_images_failed = bool(attempted_images) and len(images_skipped) == len(attempted_images)
     # No corroborating brand on any image counts as a mismatch, not just a conflicting
     # one — an undetected declared brand is exactly the counterfeit-branding signal
-    # Policy Agent's C001 needs (§3.5).
+    # Policy Agent's C001 needs (§3.5). Not when every image's extraction failed,
+    # though: that's "couldn't check," not "checked and found nothing."
     brand_mismatch = (
-        bool(declared_brand)
+        not all_attempted_images_failed
+        and bool(declared_brand)
         and declared_brand not in GENERIC_BRAND_PLACEHOLDERS
         and declared_brand not in detected_brands_lower
     )
@@ -133,6 +179,7 @@ def run_evidence_agent(canonical_doc: dict) -> dict:
         "serialNumbers": serial_numbers,
         "expiryDate": expiry_date,
         "countryOfOrigin": country_of_origin,
+        "imagesSkipped": images_skipped,
     }
 
     return {
