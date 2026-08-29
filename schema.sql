@@ -1,4 +1,4 @@
--- Agentic Marketplace Moderator — demo schema
+-- Agentic Marketplace Moderator -- demo schema
 -- Matches the real listing document shape + the §5 append-only artifact log.
 
 -- For find_similar_cases (§6, §10 in docs/decisions). Requires a Postgres build with

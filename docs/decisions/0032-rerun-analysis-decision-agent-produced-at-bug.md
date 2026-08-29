@@ -16,7 +16,7 @@ returns -- camelCase `producedAt`, an ISO-format string -- to build its `basedOn
 references (§5: `f"EvidenceAgent@{evidence_artifact['producedAt']}"`, one per
 upstream artifact). `rerun_analysis`'s `PolicyAgent` branch doesn't hit this
 (`run_policy_agent` only reads `.payload`, no `producedAt`), so this path had never
-been exercised — confirmed via a repo-wide search that `rerun_analysis` had zero test
+been exercised -- confirmed via a repo-wide search that `rerun_analysis` had zero test
 coverage at all before this fix.
 
 ## Decision

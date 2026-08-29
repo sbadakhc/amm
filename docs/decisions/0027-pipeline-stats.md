@@ -7,17 +7,17 @@ Accepted
 
 Asked directly: "are we collecting stats that we can use to understand accuracy and
 performance?" No. The raw ingredients were already sitting in the `artifacts` table
-(§5) — `produced_at` timestamps, `confidence` scores, and (via `record_decision`,
-`cli/tools.py`) a marker for every human decision — but nothing aggregated them.
+(§5) -- `produced_at` timestamps, `confidence` scores, and (via `record_decision`,
+`cli/tools.py`) a marker for every human decision -- but nothing aggregated them.
 There is no external ground truth for "is the automated decision correct" in this
 system (no labeled outcome data flows back in), so the closest available accuracy
 proxy is **how often a moderator's own verdict differs from what the automated
-pipeline decided** — i.e. an override/disagreement rate, not a true precision/recall
+pipeline decided** -- i.e. an override/disagreement rate, not a true precision/recall
 number. That's a real limitation of what's measurable here, not an oversight.
 
 ## Decision
 
-`db.get_stats(since=None)` — one function, several SQL queries against the existing
+`db.get_stats(since=None)` -- one function, several SQL queries against the existing
 `artifacts`/`listings` tables, no new schema, no new metrics-store dependency. Exposed
 via `cli.tools.get_stats()` (thin passthrough, consistent with every other tool in §6)
 and a moderator-facing markdown report, `scripts/pipeline_stats.py`.
@@ -31,7 +31,7 @@ Design choices, each because the obvious alternative was wrong or untestable:
   every one of approve/reject/escalate/request_appeal/resolve_appeal). No migration
   needed.
 - **Override rate only counts listings where both an automated APPROVE/REJECT *and* a
-  later differing moderator APPROVE/REJECT exist** — not every `PENDING_REVIEW`
+  later differing moderator APPROVE/REJECT exist** -- not every `PENDING_REVIEW`
   listing a moderator resolves. The automated pipeline routing a listing to `REVIEW`
   and a moderator then deciding APPROVE or REJECT isn't a disagreement; `REVIEW` was
   never a verdict to agree or disagree with. Conflating the two would make the
@@ -39,27 +39,27 @@ Design choices, each because the obvious alternative was wrong or untestable:
   queue got resolved," not "how often was the automation wrong"). `REVIEW`-routed
   outcomes are reported separately (`humanReviewOutcomes`) as context, not folded into
   the override number.
-- **`ESCALATE`/`REQUEST_APPEAL` are excluded from both metrics** — they're
+- **`ESCALATE`/`REQUEST_APPEAL` are excluded from both metrics** -- they're
   intermediate steps in the state machine (§8.2), not a verdict. Only the *latest*
   moderator-issued APPROVE/REJECT per listing (`DISTINCT ON ... ORDER BY produced_at
   DESC`) counts as "the" human verdict, so an escalation followed by a senior
   reviewer's final call is correctly attributed to the final call.
 - **Latency is measured as (earliest of Evidence/Consistency/Safety's `produced_at`)
   to (the automated `DecisionAgent` artifact's `produced_at`)**, per listing, then
-  averaged — the wall-clock span `pipeline.run_fusion`'s parallel fan-out/fan-in (§7)
+  averaged -- the wall-clock span `pipeline.run_fusion`'s parallel fan-out/fan-in (§7)
   actually takes, not a sum of per-agent times (which would double-count the
   concurrent portion).
-- **Failures are grouped by literal error message**, not a fixed taxonomy — every
+- **Failures are grouped by literal error message**, not a fixed taxonomy -- every
   failure type this project has hit so far (`410 Gone` on a dead model, a timeout, a
   500) produces a distinct, stable string per cause, so grouping by the raw message
   clusters correctly without needing to anticipate every future failure shape.
 - **`since` is a plain optional ISO timestamp filter on `listings.created_at`**, not a
-  rolling-window default — an all-time view by default is more useful for a project
+  rolling-window default -- an all-time view by default is more useful for a project
   this size (five-digit listing counts, not the kind of volume where "always show
   last 24h" is the sane default), and every query already threads `since` through
   identically, so a caller who wants a window just passes one.
 
-Rejected: a separate metrics/analytics table or external store — the artifact log
+Rejected: a separate metrics/analytics table or external store -- the artifact log
 already has everything needed, and this project's data volume doesn't remotely
 justify the operational overhead of a second system.
 

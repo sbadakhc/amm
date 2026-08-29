@@ -1,5 +1,5 @@
 """
-Workflow orchestration — Intake -> {Evidence, Consistency, Safety} in parallel ->
+Workflow orchestration -- Intake -> {Evidence, Consistency, Safety} in parallel ->
 Policy -> Decision. See SPEC.md §1 and §7. Single-process fan-out/fan-in, no broker.
 """
 
@@ -34,7 +34,7 @@ DECISION_TO_STATUS = {
 
 def _record_failure(listing_id: str, stage: str, error: Exception) -> None:
     """Any agent erroring or timing out goes to PENDING_REVIEW, never silent-approve
-    (§2, §4) — recorded as a Pipeline artifact so `explain_case` shows why."""
+    (§2, §4) -- recorded as a Pipeline artifact so `explain_case` shows why."""
     db.insert_artifact(
         {
             "listingId": listing_id,
@@ -49,10 +49,10 @@ def _record_failure(listing_id: str, stage: str, error: Exception) -> None:
 
 def run_fusion(canonical_doc: dict) -> dict:
     """Runs Evidence/Consistency/Safety in parallel (plus the find_similar_cases
-    embedding, §6/§10 — doesn't feed the decision, just needs the same canonical
+    embedding, §6/§10 -- doesn't feed the decision, just needs the same canonical
     doc, so it fans out alongside the agents rather than as a separate pass), then
     Policy, then Decision. Returns the final DecisionAgent artifact. Does not touch
-    listing status beyond writing the artifacts/embedding themselves — callers decide
+    listing status beyond writing the artifacts/embedding themselves -- callers decide
     what to do with the resulting status transition."""
     with ThreadPoolExecutor(max_workers=4) as pool:
         evidence_future = pool.submit(run_evidence_agent, canonical_doc)

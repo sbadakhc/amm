@@ -247,7 +247,7 @@ def main():
         seed_postgres(listings)
         seed_moderators()
     else:
-        print("DATABASE_URL not set — dry run only, nothing written to Postgres.")
+        print("DATABASE_URL not set -- dry run only, nothing written to Postgres.")
         print('Set it and re-run, e.g.:')
         print('  export DATABASE_URL="postgresql://user:pass@localhost:5432/moderator"')
 
