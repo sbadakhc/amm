@@ -104,8 +104,6 @@ rather than blocking the whole listing. Proceed.
 
 ```
 > /run
-```
-```
 5
 ```
 Five listings claimed and run through Evidence → Consistency → Safety → Policy →
