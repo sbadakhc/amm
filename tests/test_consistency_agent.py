@@ -1,13 +1,15 @@
 """
 Fixture responses are trimmed, structurally faithful copies of real
-mistralai/mistral-nemotron and nvidia/nemotron-nano-12b-v2-vl responses captured
-during development.
+mistralai/mistral-nemotron and (originally) nvidia/nemotron-nano-12b-v2-vl responses
+captured during development. The vision model was end-of-lifed by NVIDIA 2026-08-26;
+Consistency Agent now uses meta/llama-3.2-11b-vision-instruct (docs/decisions/0025) --
+same response shape, re-verified against the new model with real calls.
 """
 
 import math
 from pathlib import Path
 
-import pytest
+import requests
 
 from agents import consistency_agent
 from tests.conftest import FakeResponse
@@ -89,16 +91,66 @@ def test_retries_once_when_model_rambles_instead_of_answering(monkeypatch, canon
     assert call_count["n"] == 2
 
 
-def test_raises_after_two_consecutive_rambling_responses(monkeypatch, canonical_clean):
-    """Second consecutive failure must still raise -- not silently masked. SPEC.md §4:
-    an agent error routes the listing to PENDING_REVIEW rather than defaulting to
-    approve, so a genuine repeated failure must surface, not be swallowed."""
+def test_skips_after_two_consecutive_rambling_responses(monkeypatch, canonical_clean):
+    """docs/decisions/0028: a second consecutive malformed response skips the check
+    (lands in checksSkipped) rather than raising and crashing the whole agent run --
+    this is one signal among several Decision Agent weighs, not the only one. The
+    skipped check contributes nothing to inconsistencyScore; with no other checks
+    (canonical_clean has no images), it defaults to 0.0 rather than raising on an
+    empty mean."""
     monkeypatch.setattr(
         consistency_agent.requests, "post", lambda *a, **kw: FakeResponse(_prose_response())
     )
 
-    with pytest.raises(ValueError):
-        consistency_agent.run_consistency_agent(canonical_clean)
+    result = consistency_agent.run_consistency_agent(canonical_clean)
+
+    assert result["payload"]["checks"] == []
+    assert result["payload"]["checksSkipped"] == ["title_vs_description"]
+    assert result["payload"]["inconsistencyScore"] == 0.0
+
+
+def test_skips_on_timeout_instead_of_raising(monkeypatch, canonical_clean):
+    """A hung/unresponsive backend must not block the whole agent run -- same
+    fail-open philosophy as agents/safety_agent.py's 0022."""
+    monkeypatch.setattr(
+        consistency_agent.requests,
+        "post",
+        lambda *a, **kw: (_ for _ in ()).throw(requests.exceptions.ReadTimeout("simulated hung backend")),
+    )
+
+    result = consistency_agent.run_consistency_agent(canonical_clean)
+
+    assert result["payload"]["checks"] == []
+    assert result["payload"]["checksSkipped"] == ["title_vs_description"]
+    assert result["payload"]["inconsistencyScore"] == 0.0
+
+
+def test_skipped_check_does_not_affect_other_checks(monkeypatch):
+    """One check failing must not skip or corrupt the others -- each is independent."""
+    call_count = {"n": 0}
+
+    def fake_post(*a, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise requests.exceptions.ReadTimeout("simulated hung backend")
+        return FakeResponse(_text_response("false", -0.05))
+
+    monkeypatch.setattr(consistency_agent.requests, "post", fake_post)
+    monkeypatch.setattr(consistency_agent, "_load_image_data_url", lambda url: url)
+
+    doc = {
+        "listingId": "LST-TEST",
+        "title": "Apple iPhone 16 Pro Max",
+        "description": "Brand new, factory sealed.",
+        "images": [FIXTURE_IMAGE],
+        "declaredBrand": "Apple",
+        "categoryId": "electronics.mobile",
+    }
+    result = consistency_agent.run_consistency_agent(doc)
+
+    assert result["payload"]["checksSkipped"] == ["title_vs_description"]
+    pairs = {c["pair"] for c in result["payload"]["checks"]}
+    assert pairs == {"description_vs_images", "images_vs_declaredBrand", "category_vs_detectedObjects"}
 
 
 def test_multi_image_aggregates_as_any_confirms(monkeypatch):

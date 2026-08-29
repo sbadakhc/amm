@@ -8,7 +8,10 @@ import os
 import requests
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/embeddings"
-MODEL = "nvidia/llama-nemotron-embed-1b-v2"
+# nvidia/llama-nemotron-embed-1b-v2 was removed from NVIDIA's catalog (found via
+# scripts/preflight_check.py, docs/decisions/0026) -- replacement confirmed via a
+# real call to return the same 2048 dimensions, no schema change needed.
+MODEL = "nvidia/nemotron-3-embed-1b"
 DIMENSIONS = 2048
 
 

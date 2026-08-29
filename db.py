@@ -153,6 +153,208 @@ def latest_artifact(listing_id: str, agent: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_stats(since: str | None = None) -> dict:
+    """Aggregates pipeline accuracy/performance signals from the artifact log (§5) --
+    built for `cli.tools.get_stats()`/`scripts/pipeline_stats.py` (docs/decisions/0027)
+    to answer "how well is the automated pipeline actually doing" without a separate
+    metrics store: everything here is derived from the same append-only artifacts
+    table every agent already writes to.
+
+    `since` (ISO timestamp, optional) filters to listings created at/after that time;
+    None means all-time. Every count below is scoped to that same listing set.
+
+    Distinguishing an automated decision from a moderator one relies on two fields
+    `DecisionAgent` artifacts already carry, not a new column: `version = 'fusion-v1'`
+    marks the automated pipeline's own decision (agents/decision_agent.py always sets
+    this, `moderator=None`); any artifact with a non-null `payload->>'moderator'` came
+    from a human action (cli/tools.py's record_decision, used by every one of
+    approve_listing/reject_listing/escalate_case/request_appeal/resolve_appeal)."""
+    with get_conn() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Listing volume by current status, scoped to the same `since` window as
+        # everything else below.
+        cur.execute(
+            """
+            SELECT status, count(*) AS n
+            FROM listings
+            WHERE %(since)s::timestamptz IS NULL OR created_at >= %(since)s::timestamptz
+            GROUP BY status
+            """,
+            {"since": since},
+        )
+        listings_by_status = {r["status"]: r["n"] for r in cur.fetchall()}
+
+        # One row per listing: its first (earliest) automated decision -- the pipeline
+        # never re-emits a second fusion-v1 artifact for the same listing in normal
+        # operation, but DISTINCT ON guards the stat against rerun_analysis edge cases
+        # rather than assuming it.
+        cur.execute(
+            """
+            SELECT DISTINCT ON (a.listing_id)
+                a.listing_id, a.payload->>'decision' AS decision, (a.payload->>'confidence')::float AS confidence
+            FROM artifacts a
+            JOIN listings l ON l.listing_id = a.listing_id
+            WHERE a.agent = 'DecisionAgent' AND a.version = 'fusion-v1'
+              AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+            ORDER BY a.listing_id, a.produced_at ASC
+            """,
+            {"since": since},
+        )
+        automated = {r["listing_id"]: r for r in cur.fetchall()}
+
+        # One row per listing: the latest moderator-issued APPROVE/REJECT verdict --
+        # ESCALATE/REQUEST_APPEAL are excluded, they're intermediate steps, not a
+        # verdict to compare against the automated one.
+        cur.execute(
+            """
+            SELECT DISTINCT ON (a.listing_id)
+                a.listing_id, a.payload->>'decision' AS decision, a.payload->>'moderator' AS moderator
+            FROM artifacts a
+            JOIN listings l ON l.listing_id = a.listing_id
+            WHERE a.agent = 'DecisionAgent' AND a.payload->>'moderator' IS NOT NULL
+              AND a.payload->>'decision' IN ('APPROVE', 'REJECT')
+              AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+            ORDER BY a.listing_id, a.produced_at DESC
+            """,
+            {"since": since},
+        )
+        human_verdicts = {r["listing_id"]: r for r in cur.fetchall()}
+
+        # Safety/Consistency Agent signal quality -- avg confidence and avg
+        # inconsistency score, one row averaged per listing (not per artifact) so a
+        # listing that got a low-confidence-triggered retry doesn't get double-weighted.
+        cur.execute(
+            """
+            SELECT avg((sub.confidence)::float) AS avg_confidence
+            FROM (
+                SELECT DISTINCT ON (a.listing_id) (a.payload->>'confidence')::float AS confidence
+                FROM artifacts a
+                JOIN listings l ON l.listing_id = a.listing_id
+                WHERE a.agent = 'SafetyAgent'
+                  AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+                ORDER BY a.listing_id, a.produced_at DESC
+            ) sub
+            """,
+            {"since": since},
+        )
+        avg_safety_confidence = cur.fetchone()["avg_confidence"]
+
+        cur.execute(
+            """
+            SELECT avg((sub.score)::float) AS avg_score
+            FROM (
+                SELECT DISTINCT ON (a.listing_id) (a.payload->>'inconsistencyScore')::float AS score
+                FROM artifacts a
+                JOIN listings l ON l.listing_id = a.listing_id
+                WHERE a.agent = 'ConsistencyAgent'
+                  AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+                ORDER BY a.listing_id, a.produced_at DESC
+            ) sub
+            """,
+            {"since": since},
+        )
+        avg_inconsistency_score = cur.fetchone()["avg_score"]
+
+        # End-to-end automated pipeline latency: earliest of the three parallel
+        # agents (Evidence/Consistency/Safety, run_fusion, §7) to the automated
+        # DecisionAgent artifact, per listing, averaged.
+        cur.execute(
+            """
+            SELECT avg(EXTRACT(EPOCH FROM (d.produced_at - fan_out.started_at))) AS avg_seconds
+            FROM (
+                SELECT listing_id, min(produced_at) AS started_at
+                FROM artifacts
+                WHERE agent IN ('EvidenceAgent', 'ConsistencyAgent', 'SafetyAgent')
+                GROUP BY listing_id
+            ) fan_out
+            JOIN (
+                SELECT DISTINCT ON (listing_id) listing_id, produced_at
+                FROM artifacts
+                WHERE agent = 'DecisionAgent' AND version = 'fusion-v1'
+                ORDER BY listing_id, produced_at ASC
+            ) d ON d.listing_id = fan_out.listing_id
+            JOIN listings l ON l.listing_id = fan_out.listing_id
+            WHERE %(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz
+            """,
+            {"since": since},
+        )
+        avg_pipeline_latency_seconds = cur.fetchone()["avg_seconds"]
+
+        # Pipeline failures (agents/pipeline.py's _record_failure) -- what broke and
+        # how often, grouped by the literal error message (stable per failure type,
+        # e.g. every "410 Gone" on the same dead model produces the same string).
+        cur.execute(
+            """
+            SELECT a.payload->>'error' AS error, count(*) AS n
+            FROM artifacts a
+            JOIN listings l ON l.listing_id = a.listing_id
+            WHERE a.agent = 'Pipeline'
+              AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+            GROUP BY a.payload->>'error'
+            ORDER BY n DESC
+            """,
+            {"since": since},
+        )
+        failures_by_error = [dict(r) for r in cur.fetchall()]
+
+        # Which policy rules actually fire, and how often -- unnests each
+        # PolicyAgent artifact's matches array.
+        cur.execute(
+            """
+            SELECT m->>'rule' AS rule, count(*) AS n
+            FROM artifacts a
+            JOIN listings l ON l.listing_id = a.listing_id
+            CROSS JOIN LATERAL jsonb_array_elements(a.payload->'matches') AS m
+            WHERE a.agent = 'PolicyAgent'
+              AND (%(since)s::timestamptz IS NULL OR l.created_at >= %(since)s::timestamptz)
+            GROUP BY m->>'rule'
+            ORDER BY n DESC
+            """,
+            {"since": since},
+        )
+        policy_rule_hits = {r["rule"]: r["n"] for r in cur.fetchall()}
+
+    automated_decision_counts: dict[str, int] = {}
+    automated_confidences = []
+    for r in automated.values():
+        automated_decision_counts[r["decision"]] = automated_decision_counts.get(r["decision"], 0) + 1
+        if r["confidence"] is not None:
+            automated_confidences.append(r["confidence"])
+
+    review_outcomes: dict[str, int] = {}
+    overridden = 0
+    reviewed = 0
+    for listing_id, human in human_verdicts.items():
+        auto = automated.get(listing_id)
+        if auto is None:
+            continue
+        if auto["decision"] == "REVIEW":
+            review_outcomes[human["decision"]] = review_outcomes.get(human["decision"], 0) + 1
+            continue
+        # Only an automated APPROVE/REJECT is a verdict a human can agree or disagree
+        # with -- REVIEW is handled above and excluded from this denominator entirely.
+        reviewed += 1
+        if human["decision"] != auto["decision"]:
+            overridden += 1
+
+    return {
+        "since": since,
+        "listingsByStatus": listings_by_status,
+        "automatedDecisionCounts": automated_decision_counts,
+        "automatedAvgConfidence": (sum(automated_confidences) / len(automated_confidences)) if automated_confidences else None,
+        "humanReviewedCount": reviewed,
+        "humanReviewOutcomes": review_outcomes,
+        "overriddenCount": overridden,
+        "overrideRate": (overridden / reviewed) if reviewed else None,
+        "avgSafetyConfidence": avg_safety_confidence,
+        "avgInconsistencyScore": avg_inconsistency_score,
+        "avgPipelineLatencySeconds": avg_pipeline_latency_seconds,
+        "failuresByError": failures_by_error,
+        "policyRuleHits": policy_rule_hits,
+    }
+
+
 def get_moderator(moderator_id: str) -> dict | None:
     with get_conn() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

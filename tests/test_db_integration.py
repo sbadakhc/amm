@@ -7,6 +7,7 @@ a real database rather than reasoning about the SQL in the abstract.
 
 import json
 import uuid
+from datetime import datetime, timezone
 
 import psycopg2
 import pytest
@@ -195,12 +196,14 @@ def test_get_listing_embedding(three_embedded_listings):
 def test_find_similar_by_embedding_ranks_by_cosine_distance(three_embedded_listings):
     listing_a, listing_b, listing_c = three_embedded_listings
 
-    results = db.find_similar_by_embedding(listing_a, k=5)
-    result_ids = [r["listing_id"] for r in results]
+    # k large enough to tolerate other embedded listings already in a shared dev DB
+    # (e.g. from a manual pipeline run) -- filtered down to this fixture's own ids
+    # before asserting order, rather than assuming an empty table.
+    results = db.find_similar_by_embedding(listing_a, k=20)
+    result_ids = [r["listing_id"] for r in results if r["listing_id"] in (listing_b, listing_c)]
 
     assert result_ids[0] == listing_b  # identical direction -> distance 0
     assert result_ids[1] == listing_c  # orthogonal -> distance 1
-    assert results[0]["distance"] < results[1]["distance"]
     assert listing_a not in result_ids  # excludes itself
 
 
@@ -250,3 +253,140 @@ def test_increment_seller_violations_accumulates(seller_id):
 
 def test_get_seller_unknown_returns_none():
     assert db.get_seller("SUP-DOES-NOT-EXIST") is None
+
+
+@pytest.fixture
+def stats_listings():
+    """Three listings covering the three cases docs/decisions/0027's stats need to
+    distinguish: a REVIEW-routed listing a moderator approves (not an override -- a
+    REVIEW isn't a verdict to disagree with), an APPROVE a moderator later reverses
+    (a real override), and a REJECT a moderator agrees with (reviewed, not
+    overridden). Plus one Pipeline failure and one PolicyAgent match, to cover those
+    aggregates too.
+
+    `since` marks the instant right before these listings are inserted, so tests can
+    scope `db.get_stats(since=...)` to just this fixture's data -- a shared dev DB
+    (e.g. one with real listings from a manual pipeline run) would otherwise pollute
+    every unscoped assertion here."""
+    since = datetime.now(timezone.utc).isoformat()
+    ids = [f"LST-STATS-{uuid.uuid4().hex[:6].upper()}" for _ in range(3)]
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        for listing_id in ids:
+            cur.execute(
+                """
+                INSERT INTO listings
+                    (listing_id, seller, title, description, category, price, quantity,
+                     condition, brand, model, sku, images, attributes, shipping, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    listing_id,
+                    json.dumps({"sellerId": "SUP-STATS-TEST", "verified": True, "previousViolations": 0}),
+                    "Test Listing",
+                    "A test listing.",
+                    json.dumps({"id": "electronics.mobile", "name": "Mobile Phones"}),
+                    json.dumps({"amount": 1.0, "currency": "GBP"}),
+                    1,
+                    "new",
+                    "Apple",
+                    "Test",
+                    "SKU-TEST",
+                    json.dumps([]),
+                    json.dumps({}),
+                    json.dumps({}),
+                    "PENDING_REVIEW",
+                ),
+            )
+        conn.commit()
+
+    review_id, override_id, agree_id = ids
+
+    def _decision(listing_id, decision, confidence, moderator=None, version="fusion-v1", produced_at="2026-01-01T00:00:00Z"):
+        db.insert_artifact(
+            {
+                "listingId": listing_id,
+                "agent": "DecisionAgent",
+                "version": version,
+                "producedAt": produced_at,
+                "payload": {"decision": decision, "confidence": confidence, "policyRules": [], "explanation": "", "moderator": moderator},
+            }
+        )
+
+    # Automated REVIEW -> moderator approves. Not an override: REVIEW isn't a verdict.
+    _decision(review_id, "REVIEW", 0.5, produced_at="2026-01-01T00:00:00Z")
+    _decision(review_id, "APPROVE", 1.0, moderator="mod-1", version="moderator-override", produced_at="2026-01-01T00:01:00Z")
+
+    # Automated REJECT -> moderator overturns to APPROVE. A real override.
+    _decision(override_id, "REJECT", 0.97, produced_at="2026-01-01T00:00:00Z")
+    _decision(override_id, "APPROVE", 1.0, moderator="mod-1", version="moderator-override", produced_at="2026-01-01T00:01:00Z")
+
+    # Automated REJECT -> moderator agrees, also REJECT. Reviewed, not overridden.
+    _decision(agree_id, "REJECT", 0.99, produced_at="2026-01-01T00:00:00Z")
+    _decision(agree_id, "REJECT", 1.0, moderator="mod-1", version="moderator-override", produced_at="2026-01-01T00:01:00Z")
+
+    # One Pipeline failure and one PolicyAgent match, unrelated to the decisions above.
+    db.insert_artifact(
+        {
+            "listingId": review_id,
+            "agent": "Pipeline",
+            "version": "error-handler",
+            "producedAt": "2026-01-01T00:00:00Z",
+            "payload": {"failed": True, "stage": "pipeline", "error": "410 Client Error: Gone for url: test"},
+        }
+    )
+    db.insert_artifact(
+        {
+            "listingId": review_id,
+            "agent": "PolicyAgent",
+            "version": "test-v1",
+            "producedAt": "2026-01-01T00:00:00Z",
+            "payload": {"matches": [{"rule": "C004", "severity": "Medium", "confidence": 0.6, "autoReject": False}]},
+        }
+    )
+
+    yield {"review": review_id, "override": override_id, "agree": agree_id, "ids": ids, "since": since}
+
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM artifacts WHERE listing_id = ANY(%s)", (ids,))
+        cur.execute("DELETE FROM listings WHERE listing_id = ANY(%s)", (ids,))
+        conn.commit()
+
+
+def test_get_stats_review_outcome_is_not_counted_as_override(stats_listings):
+    stats = db.get_stats(since=stats_listings["since"])
+    assert stats["overriddenCount"] == 1  # only the REJECT->APPROVE case
+    assert stats["humanReviewOutcomes"].get("APPROVE") == 1  # the REVIEW->APPROVE case
+
+
+def test_get_stats_override_rate_excludes_agreements(stats_listings):
+    stats = db.get_stats(since=stats_listings["since"])
+    # 2 listings had an automated APPROVE/REJECT with a later moderator verdict
+    # (override + agree); 1 of those 2 differed.
+    assert stats["humanReviewedCount"] == 2
+    assert stats["overriddenCount"] == 1
+    assert stats["overrideRate"] == 0.5
+
+
+def test_get_stats_automated_decision_counts(stats_listings):
+    stats = db.get_stats(since=stats_listings["since"])
+    assert stats["automatedDecisionCounts"]["REVIEW"] == 1
+    assert stats["automatedDecisionCounts"]["REJECT"] == 2
+
+
+def test_get_stats_policy_rule_hits(stats_listings):
+    stats = db.get_stats(since=stats_listings["since"])
+    assert stats["policyRuleHits"]["C004"] == 1
+
+
+def test_get_stats_failures_by_error(stats_listings):
+    stats = db.get_stats(since=stats_listings["since"])
+    matching = [row for row in stats["failuresByError"] if row["error"] == "410 Client Error: Gone for url: test"]
+    assert matching and matching[0]["n"] == 1
+
+
+def test_get_stats_since_filters_out_older_listings(stats_listings):
+    stats = db.get_stats(since="2099-01-01T00:00:00Z")
+    assert stats["humanReviewedCount"] == 0
+    assert stats["automatedDecisionCounts"] == {}
