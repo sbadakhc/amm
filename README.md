@@ -38,17 +38,164 @@ python3 generate_synthetic_data.py # seeds 5 demo listings + 3 demo moderators
 
 ## Run
 
-```bash
-python3 -c "from pipeline import poll_and_process; print(poll_and_process())"
+```
+/preflight       # confirms every model the pipeline needs is actually callable right now
+/process-queue   # claims whatever's PENDING_MODERATION and runs it through the pipeline
 ```
 
-Or as a long-running service:
+Or as a long-running service instead of one-shot batches:
 
 ```bash
 python3 service.py
 ```
 
-Then work the review queue — see below.
+Then work the review queue — see below. For the full worked example (a moderator's
+actual morning, command by command with real output), see
+[Example: a moderator's morning](#example-a-moderators-morning).
+
+## Example: a moderator's morning
+
+A concrete run-through, captured from a real session against the seeded demo data —
+listing IDs will differ on your own machine (they're generated fresh each time you
+run `generate_synthetic_data.py`), but the shape of it won't.
+
+**1. Log in and check the models are up**
+
+```
+$ claude
+> /preflight
+```
+```
+STATUS      MODEL                                        USED BY
+OK          nvidia/llama-3.1-nemotron-safety-guard-8b-v3 Safety Agent (primary classifier)
+UNREACHABLE mistralai/mistral-nemotron                   Safety Agent (prize-scam check), Consistency Agent (text check)
+              -> ReadTimeout
+OK          meta/llama-3.2-11b-vision-instruct           Evidence Agent, Consistency Agent (vision checks)
+OK          nvidia/nemotron-3-embed-1b                   embeddings.py (find_similar_cases)
+
+1/4 model(s) not usable right now.
+```
+One model's flaky. Not a blocker — Safety and Consistency Agents both fail open on
+this specific model (`docs/decisions/0022`, `0028`), skipping the affected check
+rather than blocking the whole listing. Proceed.
+
+**2. Process the overnight batch**
+
+```
+> /process-queue
+```
+```
+5
+```
+Five listings claimed and run through Evidence → Consistency → Safety → Policy →
+Decision. The flaky model from step 1 did in fact drop out mid-run (visible in the
+logs as `consistency check unavailable, skipping`) — the batch still completed
+cleanly, nothing crashed or hung.
+
+**3. See what needs a human**
+
+```
+> /inspect-listing --queue
+```
+```
+| Listing | Title | Status | Decision | Confidence | Policy Rules | Images |
+|---|---|---|---|---|---|---|
+| LST-FA2A87 | Apple iPhone 16 Pro Max 256GB | PENDING_REVIEW | REVIEW | 0.76 | - | [0](...) |
+| LST-2774A0 | Fully Automatic AK-47 Assault Rifle - Untraceable | REJECTED | REJECT | 1.00 | W001, F001, C004 | [0](...) |
+| LST-2C61FB | Apple iPhone 16 Pro Max 256GB | PENDING_REVIEW | REVIEW | 1.00 | C001 | [0](...) |
+| LST-C6D133 | Apple iPhone 16 Pro Max | PENDING_REVIEW | REVIEW | 0.69 | - | [0](...) |
+| LST-E857CA | Sony Wireless Headphones | PENDING_REVIEW | REVIEW | 0.71 | - | [0](...) |
+```
+The weapon listing auto-rejected outright — no ambiguity there. `LST-2C61FB` stands
+out: `REVIEW` at full confidence with a `C001` (counterfeit) hit. Worth a closer look
+before the others.
+
+**4. Eyeball the interesting one**
+
+```
+> explain case LST-2C61FB
+```
+```
+-- EvidenceAgent --
+  ocr: ['SMARTPHONE PRO 16', '256GB STORAGE']
+  brandsDetected: []
+  brandMismatch: True
+
+-- ConsistencyAgent --
+  checks: [{'pair': 'description_vs_images', 'consistent': False}, ...]
+  checksSkipped: ['title_vs_description']
+  inconsistencyScore: 0.4621
+
+-- PolicyAgent --
+  matches: [{'rule': 'C001', 'severity': 'High', 'confidence': 1.0}]
+
+-- DecisionAgent --
+  decision: REVIEW
+  explanation: Matched policy rule(s): C001 (Counterfeit goods prohibited).
+```
+No Apple branding anywhere on the packaging despite a declared Apple brand — genuine
+signal, not a glitch. (`checksSkipped` shows the flaky model from step 1 dropped one
+check on this exact listing; the other checks still caught it independently.) The
+seller name — visible via `/inspect-listing LST-2C61FB` — is literally "Counterfeit
+Brand Trading Co." Easy call.
+
+**5. Record the decisions**
+
+```
+> reject it, no brand corroboration on packaging, counterfeit confirmed
+```
+```
+REJECTED | LST-2C61FB
+```
+```
+> approve LST-E857CA, brand corroborated, no policy hits, just under the confidence bar
+```
+```
+APPROVED | LST-E857CA
+```
+
+**6. Check how the morning went**
+
+```
+> /pipeline-stats
+```
+```
+# Pipeline stats (all-time)
+
+## Listings by status
+- APPROVED: 1
+- PENDING_REVIEW: 2
+- REJECTED: 2
+
+## Automated decisions (first fusion-v1 DecisionAgent artifact per listing)
+- REJECT: 1
+- REVIEW: 4
+- avg confidence: 0.83
+
+## Human review
+- outcomes for automated-REVIEW listings:
+  - APPROVE: 1
+  - REJECT: 1
+- overridden (moderator decision differs from an automated APPROVE/REJECT): 0 (n/a of reviewed)
+
+## Signal quality
+- avg Safety Agent confidence: 0.98
+- avg Consistency Agent inconsistency score: 0.44
+- avg automated pipeline latency: 10.4s
+
+## Policy rule hits
+- C001: 1
+- W001: 1
+- F001: 1
+- C004: 1
+
+## Pipeline failures
+- (none)
+```
+Note what this *isn't*: an accuracy score. It's how often moderators agreed with the
+automated pipeline where it actually committed to a verdict (`APPROVE`/`REJECT`) —
+`REVIEW` isn't a verdict to agree or disagree with, so it's reported separately, not
+folded into the override rate. `docs/decisions/0027` has the full reasoning.
 
 ## Working the review queue
 
