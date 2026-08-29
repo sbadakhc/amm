@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 import statistics
 from datetime import datetime, timezone
 
@@ -38,6 +39,73 @@ VISION_MODEL = "meta/llama-3.2-11b-vision-instruct"
 # indefinitely with no timeout of its own (docs/decisions/0022) -- this agent must
 # impose one rather than trust the backend to. See docs/decisions/0028.
 CONSISTENCY_CHECK_TIMEOUT = float(os.environ.get("CONSISTENCY_CHECK_TIMEOUT", "10"))
+
+# Deliberately below typical real-call model confidence (usually >=0.9 for a clear
+# case) -- this is a narrow keyword heuristic, not a model judgment, and shouldn't
+# read as equally certain. See docs/decisions/0030.
+HEURISTIC_BACKSTOP_CONFIDENCE = float(os.environ.get("HEURISTIC_BACKSTOP_CONFIDENCE", "0.7"))
+
+# Heuristic backstop for title_vs_description (docs/decisions/0030), used only when
+# the real model call was skipped (0028) -- not a replacement, since it only catches
+# one narrow pattern (an explicit competing brand name) and would otherwise miss
+# everything the model catches by actual semantic reasoning. Groups, not a flat set:
+# "iphone"/"apple" must count as the same brand, or "Apple iPhone" would false-flag
+# itself. Deliberately small and manually maintained -- same trade-off ADR 0020 already
+# accepted for its own keyword heuristic (imperfect recall, no ongoing-maintenance
+# promise), acceptable here only because this is a fallback for an already-degraded
+# path, not the primary signal.
+_BRAND_GROUPS = [
+    {"apple", "iphone", "ipad", "macbook", "airpods"},
+    {"samsung", "galaxy"},
+    {"google", "pixel"},
+    {"sony", "playstation"},
+    {"xiaomi", "redmi", "poco"},
+    {"huawei"},
+    {"oneplus"},
+    {"nokia"},
+    {"motorola", "moto"},
+    {"lg"},
+    {"microsoft", "surface"},
+    {"bose"},
+    {"jbl"},
+    {"beats"},
+    {"sennheiser"},
+]
+
+# Phrasing that means a second brand is being referenced (comparison, compatibility,
+# a barter listing naming both sides), not claimed as the product's own identity --
+# confirmed via prototyping (docs/decisions/0030) that a naive "any disjoint brand
+# group" check false-positives constantly on ordinary marketplace language without
+# this exclusion.
+_BRAND_MENTION_DISQUALIFIERS = [
+    r"\b(better|worse|compared?|vs\.?|versus)\s+(than|to)\b",
+    r"\bcompatible\s+with\b",
+    r"\bworks?\s+with\b",
+    r"\bfor\s+(your|my)\b",
+    r"\balso\s+fits?\b",
+]
+
+
+def _detect_brand_groups(text: str) -> set[int]:
+    words = set(re.sub(r"[^a-z0-9\s]", " ", text.lower()).split())
+    return {i for i, group in enumerate(_BRAND_GROUPS) if words & group}
+
+
+def _heuristic_title_vs_description_contradiction(title: str, description: str) -> bool:
+    """True only when title and description each name a *different*, non-disqualified
+    brand -- a narrow, high-precision signal, not a general contradiction detector.
+    False (not "unknown") for everything else, including genuine contradictions this
+    heuristic simply can't see (a wrong storage size, a wrong condition claim, any
+    contradiction that isn't a named competing brand) -- the caller must not treat a
+    False return here as "confirmed consistent," only as "this narrow check found
+    nothing," per docs/decisions/0030."""
+    if any(re.search(p, title.lower()) or re.search(p, description.lower()) for p in _BRAND_MENTION_DISQUALIFIERS):
+        return False
+    title_brands = _detect_brand_groups(title)
+    description_brands = _detect_brand_groups(description)
+    if not title_brands or not description_brands:
+        return False
+    return title_brands.isdisjoint(description_brands)
 
 
 def _load_image_data_url(url: str) -> str:
@@ -174,12 +242,12 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
     checks_skipped = []
     disagreements = []
 
-    def _record(pair: str, result: tuple[bool, float] | None) -> None:
+    def _record(pair: str, result: tuple[bool, float] | None, method: str = "model") -> None:
         if result is None:
             checks_skipped.append(pair)
             return
         consistent, conf = result
-        checks.append({"pair": pair, "consistent": consistent})
+        checks.append({"pair": pair, "consistent": consistent, "method": method})
         disagreements.append(_disagreement(consistent, conf))
 
     title_vs_description = _text_check(
@@ -189,10 +257,21 @@ def run_consistency_agent(canonical_doc: dict) -> dict:
         "Answer with exactly one word: true or false.\n"
         f"Title: {title}\nDescription: {description}"
     )
-    _record(
-        "title_vs_description",
-        None if title_vs_description is None else (not title_vs_description[0], title_vs_description[1]),
-    )
+    if title_vs_description is not None:
+        _record("title_vs_description", (not title_vs_description[0], title_vs_description[1]))
+    elif _heuristic_title_vs_description_contradiction(title, description):
+        # docs/decisions/0030: the model call was skipped, but a narrow keyword
+        # backstop found an explicit competing brand -- report it, at a deliberately
+        # lower confidence than a real model verdict, rather than leaving this
+        # listing with zero signal on the exact check most likely to catch an
+        # obvious title/description swap.
+        logger.warning("title_vs_description model check skipped; heuristic backstop found a contradiction")
+        _record("title_vs_description", (False, HEURISTIC_BACKSTOP_CONFIDENCE), method="heuristic-backstop")
+    else:
+        # Heuristic found nothing -- that means "this narrow check found nothing,"
+        # not "confirmed consistent" (it can't see non-brand-name contradictions), so
+        # this still counts as skipped, not as a passing check.
+        checks_skipped.append("title_vs_description")
 
     if images:
         results = [
