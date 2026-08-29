@@ -219,9 +219,12 @@ folded into the override rate. `docs/decisions/0027` has the full reasoning.
   branch. Feature branches come off `dev`; PRs target `dev`, and `dev` gets promoted
   into `main` as its own separate merge commit once work is ready to ship (not a
   fast-forward -- see `git log` for the "Promote dev into main" commits).
-- Two slash commands drive that cycle instead of improvising each time:
-  `/commit-pr` (stage, conventional-commit, push, open the PR) and `/finish-pr`
-  (verify the merge, sync `dev`, delete the branch) -- see `.claude/commands/`.
+- Slash commands drive that cycle instead of improvising each time: `/commit-pr`
+  (stage, conventional-commit, push, open the PR) and `/finish-pr` (verify the
+  merge, sync `dev`, delete the branch) -- see `.claude/commands/`. `/release`
+  (`.claude/skills/release/`) covers the other half: promote `dev` into `main`,
+  sync everything, delete the merged branch, and retro-fit a tracking issue plus
+  labels/assignees for anything that shipped without one.
 - Commits are GPG-signed. Claude Code will stage changes and hand you the exact
   `git commit`/`git push` command to run yourself rather than attempting a signing
   prompt itself.
