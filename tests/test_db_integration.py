@@ -18,6 +18,24 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
+def restore_collateral_claims():
+    """`db.claim_pending` claims *any* `PENDING_MODERATION` row system-wide (§2.1),
+    not just a test's own fixture row -- calling it with a real DATABASE_URL against
+    a shared dev DB collaterally claims real/demo listings too and strands them in
+    PROCESSING with zero artifacts, since the test never runs them through the
+    pipeline (found live via /housekeeping: a plain `pytest -v` run left 5 freshly
+    seeded demo listings stuck this way, docs/decisions/0035). Resets anything still
+    PROCESSING after the test back to PENDING_MODERATION; the test's own fixture row
+    is either already deleted by its own teardown or gets reset by this along with
+    everything else, either way harmless."""
+    yield
+    with db.get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE listings SET status = 'PENDING_MODERATION', updated_at = now() WHERE status = 'PROCESSING'")
+        conn.commit()
+
+
+@pytest.fixture
 def seeded_listing():
     listing_id = f"LST-TEST-{uuid.uuid4().hex[:6].upper()}"
     with db.get_conn() as conn:
@@ -59,7 +77,7 @@ def seeded_listing():
         conn.commit()
 
 
-def test_claim_pending_moves_to_processing(seeded_listing):
+def test_claim_pending_moves_to_processing(seeded_listing, restore_collateral_claims):
     claimed = db.claim_pending(batch_size=50)
     claimed_ids = {row["listing_id"] for row in claimed}
     assert seeded_listing in claimed_ids
@@ -68,7 +86,7 @@ def test_claim_pending_moves_to_processing(seeded_listing):
     assert row["status"] == "PROCESSING"
 
 
-def test_claim_pending_does_not_reclaim_already_processing(seeded_listing):
+def test_claim_pending_does_not_reclaim_already_processing(seeded_listing, restore_collateral_claims):
     db.claim_pending(batch_size=50)
     second_batch = db.claim_pending(batch_size=50)
     claimed_ids = {row["listing_id"] for row in second_batch}
@@ -177,7 +195,7 @@ def test_list_listings_by_status_applies_limit(two_listings_distinct_categories)
     assert len(limited) == 1
 
 
-def test_sweep_stale_processing_resets_old_rows(seeded_listing):
+def test_sweep_stale_processing_resets_old_rows(seeded_listing, restore_collateral_claims):
     db.claim_pending(batch_size=50)
     with db.get_conn() as conn:
         cur = conn.cursor()
