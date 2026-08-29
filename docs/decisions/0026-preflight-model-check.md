@@ -76,6 +76,13 @@ NVIDIA model concern).
 - `embeddings.py`: `MODEL` updated (`nvidia/nemotron-3-embed-1b`), found and fixed as
   a direct result of building this check, not a separately investigated issue.
 - AGENTS.md: preflight documented as the first step before running real-call tests.
+- `tests/test_preflight_check.py` (added 2026-08-29, coverage follow-up): pins down
+  the GONE-vs-UNREACHABLE classification itself with `requests.get`/`requests.post`
+  mocked out -- not in catalog -> GONE without even attempting a live call; in
+  catalog but a live call fails/times out/returns non-2xx (non-410) -> UNREACHABLE;
+  `410` -> GONE; catalog fetch itself failing (`catalog=None`) falls through to a
+  live call rather than assuming either way. Also covers `_suggest_candidates`'
+  same-owner/keyword matching and `check_all`'s aggregation. No real NVIDIA calls.
 - **No programmatic early-warning exists for NVIDIA model EOL.** Investigated as part
   of this decision: `/v1/models` returns no deprecation/sunset-date field (just `id`,
   `object`, `created`, `owned_by`) -- there is no field to poll ahead of time. The
