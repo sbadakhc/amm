@@ -1,5 +1,5 @@
 """
-Moderator CLI tools — see SPEC.md §6. Conversational, tool-driven, no direct DB access:
+Moderator CLI tools -- see SPEC.md §6. Conversational, tool-driven, no direct DB access:
 a moderator (or Claude Code on their behalf) calls these functions; nothing here talks
 to Postgres except through them.
 """
@@ -24,13 +24,13 @@ AGENT_RUNNERS = {
 
 
 def list_pending(limit: int | None = None, category: str | None = None) -> list[dict]:
-    """`list_pending()` (§6) — the moderator's review queue, i.e. listings currently
+    """`list_pending()` (§6) -- the moderator's review queue, i.e. listings currently
     `PENDING_REVIEW`."""
     return db.list_listings_by_status("PENDING_REVIEW", limit=limit, category_id=category)
 
 
 def get_listing(listing_id: str) -> dict:
-    """`get_listing(listingId)` (§6) — full document + agent outputs."""
+    """`get_listing(listingId)` (§6) -- full document + agent outputs."""
     row = db.get_listing_row(listing_id)
     if row is None:
         raise ValueError(f"No such listing: {listing_id}")
@@ -38,13 +38,13 @@ def get_listing(listing_id: str) -> dict:
 
 
 def explain_case(listing_id: str) -> list[dict]:
-    """`explain_case(listingId)` (§6) — all artifacts for the listing, per-agent, in
+    """`explain_case(listingId)` (§6) -- all artifacts for the listing, per-agent, in
     order; reads straight off the artifact log (§5), no separate reasoning trace."""
     return db.get_artifacts(listing_id)
 
 
 def get_stats(since: str | None = None) -> dict:
-    """`get_stats(since?)` (§6, docs/decisions/0027) — automated-pipeline accuracy and
+    """`get_stats(since?)` (§6, docs/decisions/0027) -- automated-pipeline accuracy and
     performance signals: decision distribution, moderator override rate, confidence,
     latency, failure rate, policy rule hit counts. Thin passthrough to `db.get_stats`
     -- see there for what each field means and how it's derived from the artifact
@@ -61,7 +61,7 @@ def show_images(listing_id: str) -> list[str]:
 
 
 def search_policy(query: str) -> list[dict]:
-    """`search_policy(query)` (§6) — matches against the rule registry (§3.5)."""
+    """`search_policy(query)` (§6) -- matches against the rule registry (§3.5)."""
     q = query.strip().lower()
     return [
         {"rule": rule_id, **rule}
@@ -81,7 +81,7 @@ def find_similar_cases(listing_id: str, k: int = 5) -> list[dict]:
     if row is None:
         raise ValueError(f"No such listing: {listing_id}")
     if db.get_listing_embedding(listing_id) is None:
-        raise ValueError(f"No embedding computed yet for listing {listing_id} — run the pipeline on it first")
+        raise ValueError(f"No embedding computed yet for listing {listing_id} -- run the pipeline on it first")
     return db.find_similar_by_embedding(listing_id, k=k)
 
 
@@ -116,7 +116,7 @@ def record_decision(
     version: str = "moderator-override",
     count_violation: bool = True,
 ) -> dict:
-    """`record_decision(listingId, decision, reason)` (§6) — appends a new DecisionAgent
+    """`record_decision(listingId, decision, reason)` (§6) -- appends a new DecisionAgent
     artifact (moderator override, §5) rather than editing the automated one, and moves
     the listing to the matching status. A REJECT decision also increments the
     seller's placeholder violation count (§8.3, docs/decisions/0017), same as the
@@ -164,7 +164,7 @@ def approve_listing(listing_id: str, moderator_id: str | None = None, note: str 
 
 
 def reject_listing(listing_id: str, moderator_id: str | None = None, reason: str | None = None) -> dict:
-    """`reject_listing(listingId, moderatorId, reason)` (§6) — matches the documented
+    """`reject_listing(listingId, moderatorId, reason)` (§6) -- matches the documented
     positional order; `reason` is still required at runtime (not truly optional, just
     can't have a Python default positioned after `moderator_id`'s). `moderator_id`
     defaults to the `MODERATOR_ID` env var when not given explicitly."""
@@ -285,7 +285,7 @@ def _with_produced_at(artifact_row: dict) -> dict:
 
 def rerun_analysis(listing_id: str, agent: str | None = None) -> dict:
     """`rerun_analysis(listingId, agent?)` (§6). Appends new artifact(s) rather than
-    overwriting (§5) — safe to call on a terminal listing, e.g. after a model upgrade.
+    overwriting (§5) -- safe to call on a terminal listing, e.g. after a model upgrade.
     `agent=None` reruns the full Evidence/Consistency/Safety/Policy/Decision chain;
     naming one agent reruns just that step (Policy/Decision pull the latest upstream
     artifacts already on file rather than re-running everything upstream of them)."""

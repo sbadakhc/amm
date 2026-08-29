@@ -1,6 +1,6 @@
 """
-Policy Agent — maps Evidence/Safety/Consistency findings to policy rules, keyed off
-categoryId. See SPEC.md §3.5. Deterministic — no model call.
+Policy Agent -- maps Evidence/Safety/Consistency findings to policy rules, keyed off
+categoryId. See SPEC.md §3.5. Deterministic -- no model call.
 """
 
 import json
@@ -92,7 +92,7 @@ SAFETY_CATEGORY_TO_RULE = {
 }
 
 # Rule sets are looked up per category (§3.5); "*" is the catch-all applied whenever a
-# category has no more specific entry. No category narrows this further yet — add a
+# category has no more specific entry. No category narrows this further yet -- add a
 # prefix key (e.g. "finance") to scope rules to just that category tree.
 RULE_SETS_BY_CATEGORY_PREFIX = {
     "*": ["W001", "C001", "C004", "D001", "F001", "S001", "INJ001"],

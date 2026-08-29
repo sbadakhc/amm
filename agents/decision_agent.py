@@ -1,6 +1,6 @@
 """
-Decision Agent — combines PolicyAgent matches into a final decision using the fusion
-algorithm in §4. See SPEC.md §3.6. Deterministic — no model call.
+Decision Agent -- combines PolicyAgent matches into a final decision using the fusion
+algorithm in §4. See SPEC.md §3.6. Deterministic -- no model call.
 """
 
 import json
@@ -64,7 +64,7 @@ def run_decision_agent(
 ) -> dict:
     """
     Fuses EvidenceAgent/ConsistencyAgent/SafetyAgent/PolicyAgent artifacts (§5, full
-    artifacts — not just payloads, since basedOn needs their producedAt) into a
+    artifacts -- not just payloads, since basedOn needs their producedAt) into a
     DecisionAgent artifact per §5 using the algorithm in §4. The four threshold
     params default to the module constants (env-configurable, see above) when not
     given explicitly.
@@ -83,13 +83,13 @@ def run_decision_agent(
     matches = policy_artifact["payload"]["matches"]
     inconsistency_score = consistency_artifact["payload"].get("inconsistencyScore", 0.0)
 
-    # Step 1 — aggregate confidence.
+    # Step 1 -- aggregate confidence.
     if matches:
         confidence = max(m["confidence"] for m in matches)
     else:
         confidence = 1 - inconsistency_score
 
-    # Step 2 — seller history adjustment, based on where the pre-adjustment confidence
+    # Step 2 -- seller history adjustment, based on where the pre-adjustment confidence
     # would tentatively route (§4 step 2 refers forward to step 3's routing).
     previous_violations = canonical_doc.get("sellerPreviousViolations", 0) or 0
     adjustment = 0.0
@@ -105,7 +105,7 @@ def run_decision_agent(
             adjustment = magnitude
         confidence = min(max(confidence + adjustment, 0.0), 1.0)
 
-    # Step 3 — final routing on the adjusted confidence.
+    # Step 3 -- final routing on the adjusted confidence.
     decision = _route(matches, confidence, critical_reject_threshold, auto_approve_threshold)
     explanation = _explain(decision, matches, confidence, inconsistency_score, adjustment)
 
